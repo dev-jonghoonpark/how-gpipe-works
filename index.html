@@ -1,0 +1,909 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPipe — 층을 나누고, 배치를 쪼개고, 갱신은 한 번에</title>
+<meta name="description" content="GPipe(Huang et al., NeurIPS 2019)를 브라우저에서 직접 실험하며 배우는 인터랙티브 교육 자료. 한 장치에 안 들어가는 모델의 메모리 계산, 단순 모델 병렬의 유휴, 마이크로배치 파이프라인 타임라인, 버블 비율 (K−1)/(M+K−1), 분할 균형, 재계산으로 줄이는 활성 메모리, 동기식 기울기 누적이 같은 결과를 내는 이유, 논문의 확장 결과, 데이터·텐서 병렬과 PipeDream·1F1B 비교까지.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/contrib/auto-render.min.js"></script>
+<style>
+:root{
+  color-scheme: light;
+  --surface-1:#fcfcfb;
+  --page:#f9f9f7;
+  --text-primary:#0b0b0b;
+  --text-secondary:#52514e;
+  --muted:#898781;
+  --grid:#e1e0d9;
+  --axis:#c3c2b7;
+  --border:rgba(11,11,11,0.10);
+  --s1:#2a78d6;
+  --s2:#eb6834;
+  --s3:#1baf7a;
+  --s4:#8b5cf6;
+  --s8:#e34948;
+  --warn:#fab219;
+  --good:#0ca30c;
+  --wash:rgba(42,120,214,0.08);
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --surface-1:#1a1a19;
+  --page:#0d0d0d;
+  --text-primary:#ffffff;
+  --text-secondary:#c3c2b7;
+  --muted:#898781;
+  --grid:#2c2c2a;
+  --axis:#383835;
+  --border:rgba(255,255,255,0.10);
+  --s1:#3987e5;
+  --s2:#d95926;
+  --s3:#199e70;
+  --s4:#a78bfa;
+  --s8:#e66767;
+  --warn:#fab219;
+  --good:#0ca30c;
+  --wash:rgba(57,135,229,0.14);
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%; scroll-behavior:smooth}
+body{
+  margin:0; background:var(--page); color:var(--text-primary);
+  font-family:system-ui,-apple-system,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+  font-size:16px; line-height:1.75; letter-spacing:-0.01em;
+}
+.wrap{max-width:880px;margin:0 auto;padding:0 16px 120px}
+header.hero{padding:56px 0 28px;border-bottom:1px solid var(--border);margin-bottom:8px}
+h1{font-size:clamp(28px,5.2vw,42px);line-height:1.25;margin:0 0 12px;letter-spacing:-0.03em}
+.sub{color:var(--text-secondary);font-size:17px;margin:0}
+.kicker{font-size:12px;letter-spacing:0.12em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0 0 10px}
+h2{font-size:clamp(21px,3.4vw,27px);margin:56px 0 6px;letter-spacing:-0.02em;line-height:1.3}
+h3{font-size:18px;margin:34px 0 6px;letter-spacing:-0.015em}
+p{margin:12px 0}
+ul,ol{margin:12px 0;padding-left:22px}
+li{margin:6px 0}
+strong{font-weight:650}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:0.9em;background:var(--wash);padding:1px 5px;border-radius:4px}
+a{color:var(--s1)}
+.demo{background:var(--surface-1);border:1px solid var(--border);border-radius:14px;padding:18px;margin:24px 0}
+.demo h4{margin:0 0 2px;font-size:15px;color:var(--text-primary);font-weight:650}
+.demo .cap{color:var(--muted);font-size:13px;margin:0 0 14px;line-height:1.6}
+canvas{display:block;width:100%;border-radius:8px;background:var(--surface-1);touch-action:manipulation}
+.ctrls{display:flex;flex-wrap:wrap;gap:14px 22px;margin:14px 0 4px;align-items:flex-end}
+.ctrl{flex:1 1 210px;min-width:170px}
+.ctrl label{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--text-secondary);margin-bottom:4px;gap:10px}
+.ctrl label b{font-variant-numeric:tabular-nums;color:var(--text-primary);font-weight:650;font-size:13px}
+input[type=range]{width:100%;accent-color:var(--s1);height:22px;margin:0}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+button{font:inherit;font-size:13px;font-weight:600;padding:7px 14px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface-1);color:var(--text-primary);transition:background .12s}
+button:hover{background:var(--wash)}
+button[aria-pressed=true]{background:var(--wash);border-color:var(--s1)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--text-secondary);margin:10px 0 0}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{width:14px;height:3px;border-radius:2px;display:inline-block}
+.readout{display:flex;flex-wrap:wrap;gap:8px 26px;margin-top:12px;font-size:13px;color:var(--text-secondary)}
+.readout b{display:block;font-size:19px;color:var(--text-primary);font-weight:650;line-height:1.3;letter-spacing:-0.02em;font-variant-numeric:tabular-nums}
+.eq{background:var(--surface-1);border:1px solid var(--border);border-left:3px solid var(--s1);
+  border-radius:0 10px 10px 0;padding:14px 18px;margin:18px 0;overflow-x:auto;text-align:center}
+.eq .note{display:block;font-size:12.5px;color:var(--muted);margin:6px 0 0;line-height:1.55;text-align:left}
+.tw{overflow-x:auto;margin:18px 0;border:1px solid var(--border);border-radius:12px;background:var(--surface-1)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:9px 13px;text-align:left;border-bottom:1px solid var(--border);vertical-align:middle}
+th{font-weight:650;font-size:12.5px;color:var(--text-secondary);background:var(--page)}
+tr:last-child td{border-bottom:none}
+td.num,th.num{font-variant-numeric:tabular-nums;text-align:right}
+td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px}
+.note{border-left:3px solid var(--axis);padding:2px 0 2px 16px;margin:18px 0;color:var(--text-secondary);font-size:14.5px}
+.key{border:1px solid var(--border);border-left:3px solid var(--s2);background:var(--surface-1);
+  border-radius:0 10px 10px 0;padding:14px 18px;margin:20px 0}
+.key .lbl{font-size:11.5px;font-weight:700;letter-spacing:0.1em;color:var(--s2);display:block;margin-bottom:4px}
+.key p{margin:0}
+nav.toc{background:var(--surface-1);border:1px solid var(--border);border-radius:14px;padding:18px 22px;margin:26px 0}
+nav.toc ol{margin:6px 0 0;padding-left:20px;font-size:14.5px}
+nav.toc a{text-decoration:none;color:var(--text-primary)}
+nav.toc a:hover{color:var(--s1)}
+.q{border:1px solid var(--border);border-radius:10px;background:var(--surface-1);padding:16px 18px;margin:14px 0}
+.q h4{margin:0 0 8px;font-size:15px;color:var(--text-primary)}
+.q .opt{display:flex;gap:9px;align-items:flex-start;padding:7px 10px;border:1px solid var(--border);
+  border-radius:8px;margin:6px 0;cursor:pointer;font-size:14px;transition:border-color .12s}
+.q .opt:hover{border-color:var(--s1)}
+.q .opt input{margin-top:5px;accent-color:var(--s1)}
+.q .opt.correct{border-color:var(--good);background:rgba(12,163,12,0.08)}
+.q .opt.wrong{border-color:var(--s8);background:rgba(227,73,72,0.07)}
+.q .expl{display:none;font-size:13.5px;color:var(--text-secondary);border-left:3px solid var(--good);
+  padding:2px 0 2px 12px;margin-top:10px;line-height:1.65}
+.q .expl.bad{border-left-color:var(--s8)}
+.q .expl.show{display:block}
+.quiz-score{font-size:15px;font-weight:700;margin-top:14px}
+.tog{position:fixed;top:14px;right:14px;z-index:10;border-radius:999px;padding:7px 13px;
+  background:var(--surface-1);border:1px solid var(--border);font-size:12.5px}
+footer{margin-top:70px;padding-top:22px;border-top:1px solid var(--border);color:var(--muted);font-size:13px}
+footer a{color:var(--text-secondary)}
+.refs{font-size:13px;color:var(--text-secondary);line-height:1.7}
+.easy{background:var(--surface-1);border:1px solid var(--border);border-left:3px solid var(--s3);border-radius:0 14px 14px 0;padding:18px 20px;margin:24px 0}
+.easy .lbl{font-size:11.5px;font-weight:700;letter-spacing:0.1em;color:var(--s3);display:block;margin-bottom:2px}
+.easy h3{margin:0 0 8px}
+.easy ol{padding-left:20px}
+.easy .big{font-size:17px;text-align:center;margin:10px 0;font-weight:650}
+.sw{display:grid;grid-template-columns:150px 1fr 64px;gap:8px 10px;align-items:center;font-size:13px;margin-top:12px}
+.sw .bar{position:relative;height:18px;background:var(--page);border:1px solid var(--border);border-radius:4px}
+.sw .bar i{position:absolute;top:0;bottom:0;border-radius:3px}
+.sw .bar:after{content:'';position:absolute;left:50%;top:-3px;bottom:-3px;border-left:1px solid var(--axis)}
+.sw b{font-variant-numeric:tabular-nums;text-align:right}
+.split{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:640px){.split{grid-template-columns:1fr}}
+.split h5{margin:4px 0 0;font-size:13px;color:var(--text-secondary);font-weight:650}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:13px;margin:16px 0;justify-content:center}
+.flow span{border:1px solid var(--border);background:var(--surface-1);border-radius:8px;padding:5px 10px;font-weight:600}
+.flow em{color:var(--muted);font-style:normal}
+sup.fn{font-size:0.72em;line-height:0;margin-left:1px}
+sup.fn a{text-decoration:none;font-weight:700;padding:0 2px}
+.footnotes{margin-top:64px;padding-top:18px;border-top:1px solid var(--border);font-size:14.5px;color:var(--text-secondary)}
+.footnotes h2{font-size:18px;margin:0 0 10px;color:var(--text-primary)}
+.footnotes ol{padding-left:22px}
+.footnotes li:target{background:var(--wash);border-radius:8px}
+.footnotes p{margin:10px 0}
+.footnotes .tw{font-size:13.5px}
+.footnotes .back{text-decoration:none;margin-left:4px}
+.pill{display:inline-block;font-size:11.5px;font-weight:700;padding:1px 8px;border-radius:999px;background:var(--wash);color:var(--s1);margin-left:6px;vertical-align:2px}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden;flex-wrap:wrap}
+.seg button{border:none;border-radius:0;border-right:1px solid var(--border)}
+.seg button:last-child{border-right:none}
+.chk{display:inline-flex;align-items:center;gap:7px;font-size:13px;color:var(--text-secondary);cursor:pointer;user-select:none}
+.chk input{accent-color:var(--s1);margin:0}
+.mini{font-size:12.5px;color:var(--muted);margin:8px 0 0}
+td.hi{background:var(--wash);font-weight:650}
+.vs{display:inline-block;font-size:12px;color:var(--muted);margin-left:4px}
+</style>
+</head>
+<body>
+<button class="tog" id="themeBtn" type="button">◐ 다크</button>
+<div class="wrap">
+<header class="hero">
+  <p class="kicker">초거대 모델의 탄생 · Huang et al. (NeurIPS 2019)</p>
+  <h1>GPipe — 층을 나누고, 배치를 쪼개고, 갱신은 한 번에</h1>
+  <p class="sub">모델이 한 가속기의 메모리를 넘어서면 층을 여러 장치에 나눠 실을 수밖에 없습니다. 그런데 층은 앞 층의 출력을 기다려야 하므로, 그냥 나누기만 하면 한 번에 한 장치만 일하고 나머지는 놉니다. GPipe는 미니배치를 <strong>마이크로배치</strong>로 잘게 쪼개 장치들이 서로 다른 조각을 동시에 처리하게 만들고, 기울기는 모든 조각에서 모아 <strong>한 번에</strong> 적용합니다. 이 페이지는 그 타임라인을 직접 돌려 보고, 유휴 시간(버블)과 활성 메모리를 계산하고, 쪼개서 학습해도 결과가 정말 같은지 브라우저에서 학습시켜 확인합니다.</p>
+</header>
+
+<div class="key">
+  <span class="lbl">이 자료의 축</span>
+  <p><strong>모델은 층 단위로 잘라 장치에 나눠 싣고, 미니배치는 마이크로배치로 쪼개 파이프라인을 채운다. 기울기는 모든 마이크로배치에서 모아 한 번에 적용하므로, 장치를 몇 대로 나누든 학습되는 수학은 한 장치에서 돌린 것과 같다.</strong> 쪼개서 생기는 대가는 두 가지, 파이프라인의 앞뒤에 남는 유휴 시간과 마이크로배치마다 쌓이는 활성 메모리이고, GPipe는 앞의 것을 M을 키워서, 뒤의 것을 재계산으로 갚습니다.</p>
+</div>
+
+<nav class="toc">
+  <strong>학습 경로</strong>
+  <ol>
+    <li><a href="#s1">한 장치에 안 들어가는 모델</a></li>
+    <li><a href="#s2">층으로 자르기: 단순 모델 병렬과 유휴</a></li>
+    <li><a href="#s3">배치를 쪼개기: 마이크로배치 파이프라인 (그림 2c)</a></li>
+    <li><a href="#s4">버블은 얼마나 남는가</a></li>
+    <li><a href="#s5">고르게 자르기: 분할과 불균형</a></li>
+    <li><a href="#s6">재계산으로 활성 메모리 갚기</a></li>
+    <li><a href="#s7">쪼개도 같은 기울기: 동기식 누적</a></li>
+    <li><a href="#s8">논문의 결과</a></li>
+    <li><a href="#s9">다른 병렬화와 비교: 데이터·텐서 병렬, PipeDream, 1F1B</a></li>
+    <li><a href="#s10">확인 퀴즈</a></li>
+  </ol>
+</nav>
+
+<!-- ───────── 1 ───────── -->
+<h2 id="s1">1. 한 장치에 안 들어가는 모델</h2>
+<p>논문은 그림 1로 시작합니다. ImageNet 분류 모델은 몇 해 사이 용량이 <strong>36배</strong> 커졌고 정확도도 그만큼 따라 올랐습니다. 번역에서도 Transformer를 키울수록 BLEU가 올랐습니다. 문제는 모델이 커지는 속도를 가속기 메모리가 따라가지 못한다는 것입니다. 학습할 때 장치 메모리에는 가중치만 올라가는 게 아닙니다. 기울기와 옵티마이저 상태가 함께 올라가고, 역전파에 쓸 <strong>순전파 중간 결과(활성)</strong>도 남겨 둬야 합니다.</p>
+<p>논문 표 1의 Transformer 설정으로 계산해 봅니다. 층마다 모델 차원 2048, 피드포워드 차원 8192, 어휘 32k, 시퀀스 길이 1024, 배치 32이고, RMSProp을 써서 <strong>파라미터 하나에 12바이트</strong>가 든다고 표 1 설명에 적혀 있습니다(가중치·기울기·RMSProp 누적값이 4바이트씩이라고 보면 맞는 숫자입니다).</p>
+<div class="eq">
+  $$P(L) \approx \underbrace{2\,V d}_{\text{입력 임베딩 + 출력 소프트맥스}} \;+\; L\,\big(\underbrace{4d^2}_{\text{어텐션 Q, K, V, O}} + \underbrace{2dh}_{\text{피드포워드}} + \text{편향, LN}\big),\qquad d=2048,\ h=8192,\ V=32000$$
+  <span class="note">논문은 이 식을 적지 않았습니다. 표 1의 파라미터 수 다섯 개(3층 282.2M ~ 1663층 83.9B)가 층마다 약 50.36M, 고정분 약 131M으로 거의 정확히 한 직선 위에 놓여서, 그 값에 맞게 구성 요소를 맞춘 재구성입니다. 다섯 값 모두 표에 적힌 자릿수 안에서 일치합니다(3층 282.1M 대 282.2M, 1663층 83.88B 대 83.9B).</span>
+</div>
+
+<div class="demo">
+  <h4>데모 1 · 이 Transformer는 장치 몇 대에 들어가나?</h4>
+  <p class="cap">층 수 L과 장치 수 K를 바꾸면 파라미터 수와 장치당 파라미터 메모리(12바이트 × P ÷ K)를 계산합니다. 막대의 회색 선은 Cloud TPUv3 코어 하나의 메모리 16GB입니다. 버튼은 표 1의 다섯 열입니다. 활성 메모리는 계산하지 않고, 논문이 잰 값을 그대로 보여 줍니다.</p>
+  <div class="btns" id="d1pre"></div>
+  <div class="ctrls">
+    <div class="ctrl"><label>층 수 L <b id="d1Lv"></b></label><input type="range" id="d1L" min="0" max="100" step="0.1" value="15"></div>
+    <div class="ctrl"><label>장치 수 K <b id="d1Kv"></b></label><input type="range" id="d1K" min="0" max="7" step="1" value="0"></div>
+  </div>
+  <canvas id="d1cv" height="128"></canvas>
+  <div class="legend"><span><i style="background:var(--s1)"></i>가중치</span><span><i style="background:var(--s3)"></i>기울기</span><span><i style="background:var(--s4)"></i>RMSProp 누적값</span><span><i style="background:var(--s2)"></i>논문이 잰 활성(표 1 열일 때만)</span></div>
+  <div class="readout" id="d1out"></div>
+</div>
+<p>파라미터만 놓고 보면 16GB 한 장에는 약 14억 개, 25층까지 들어갑니다. 그런데 표 1에서 GPipe 없이 한 장치로 학습할 수 있었던 건 <strong>3층</strong>뿐이었습니다. 나머지 자리를 활성이 차지했기 때문입니다<sup class="fn" id="fnref1"><a href="#fn1">1</a></sup>. 128장으로 늘려도 같은 일이 일어납니다. 128 × 16GB = 2,048GB면 파라미터만으로는 1,833억 개가 들어가지만, 논문이 실제로 올린 것은 839억 개였고 그때 활성이 796.1GB를 차지했습니다. 모델을 장치에 나눠 싣는 것만큼 <strong>활성을 줄이는 것</strong>이 중요하다는 뜻이고, 이건 6절에서 다룹니다.</p>
+
+<!-- ───────── 2 ───────── -->
+<h2 id="s2">2. 층으로 자르기: 단순 모델 병렬과 유휴</h2>
+<p>GPipe가 모델에 요구하는 것은 하나입니다. <strong>층을 순서대로 나열할 수 있을 것.</strong> L개 층의 순서열을 K개의 연속된 덩어리(논문은 <em>셀</em>이라고 부릅니다)로 자르고, k번째 셀을 k번째 가속기에 올립니다.</p>
+<div class="eq">
+  $$F_k = f_j \circ \cdots \circ f_{i+1} \circ f_i, \qquad C_k = \sum_{l=i}^{j} c_l$$
+  <span class="note">2.1절. 셀 p<sub>k</sub>가 층 i부터 j까지를 담으면 그 순전파는 층 함수의 합성 F<sub>k</sub>이고, 역전파 B<sub>k</sub>는 자동 미분으로 F<sub>k</sub>에서 얻습니다. c<sub>l</sub>은 사용자가 줄 수 있는 층별 비용 추정치이고, 셀 비용 C<sub>k</sub>는 그 합입니다. 사용자가 정하는 것은 셀 수 K, 마이크로배치 수 M, 층의 순서열 세 가지뿐입니다.</span>
+</div>
+<div class="flow"><span>입력</span><em>→</em><span>장치 0 · F₀</span><em>→</em><span>장치 1 · F₁</span><em>→ … →</em><span>장치 K−1 · F<sub>K−1</sub></span><em>→ 손실 →</em><span>B<sub>K−1</sub></span><em>→ … →</em><span>B₀</span></div>
+<p>장치 사이에는 셀 경계의 활성만 오갑니다. 순전파는 장치 0에서 K−1로, 역전파는 거꾸로 흐릅니다. B<sub>k</sub>는 위쪽 셀의 B<sub>k+1</sub>과 자기 셀의 F<sub>k</sub> 결과가 둘 다 있어야 계산할 수 있습니다. 이 의존 때문에 미니배치 하나를 통째로 흘리면 장치들이 차례로 일하고 차례로 놉니다(그림 2b).</p>
+
+<div class="demo">
+  <h4>데모 2 · 미니배치를 통째로 흘리는 단순 모델 병렬</h4>
+  <p class="cap">위에서부터 장치 0, 1, …입니다. 파란 칸은 순전파 F, 주황 칸은 역전파 B, 끝의 초록 칸은 가중치 갱신입니다. 역전파는 보통 순전파의 두 배쯤 걸리므로(행렬곱이 입력에 대한 기울기와 가중치에 대한 기울기로 두 번) 기본값을 2로 두었습니다.</p>
+  <div class="ctrls">
+    <div class="ctrl"><label>장치 수 K <b id="d2Kv"></b></label><input type="range" id="d2K" min="1" max="8" step="1" value="4"></div>
+    <div class="ctrl"><label>역전파 시간 ÷ 순전파 시간 <b id="d2rv"></b></label><input type="range" id="d2r" min="1" max="3" step="0.1" value="2"></div>
+  </div>
+  <canvas id="d2cv" height="200"></canvas>
+  <div class="readout" id="d2out"></div>
+</div>
+<p>K를 올려도 한 스텝에 걸리는 시간은 그대로이고, 각 장치가 일하는 비율만 1/K로 줄어듭니다. 이 방식이 쓸모없는 건 아닙니다. 한 장치에 안 들어가던 모델이 <strong>들어가게는</strong> 되니까요. 다만 장치를 K배 써도 빨라지지는 않습니다. 논문 표 2의 M = 1 행이 이것을 잽니다. Transformer의 처리량이 K = 2, 4, 8에서 1, 1.07, 1.3으로 거의 그대로였고, 저자들은 “어느 순간에든 한 장치만 계산하고 있다는 뜻”이라고 적었습니다.</p>
+
+<!-- ───────── 3 ───────── -->
+<h2 id="s3">3. 배치를 쪼개기: 마이크로배치 파이프라인 (그림 2c)</h2>
+<p>GPipe의 해법은 미니배치를 쪼개는 것입니다. 크기 N인 미니배치를 크기 N/M인 <strong>마이크로배치</strong> M개로 나눠 차례로 흘려보냅니다. 장치 0이 첫 조각의 F를 끝내고 장치 1에 넘기면, 장치 1이 그 조각을 처리하는 동안 장치 0은 둘째 조각을 시작할 수 있습니다. 조립 라인과 같습니다.</p>
+<p>역전파도 같은 식으로 흐릅니다. 각 마이크로배치의 기울기는 순전파 때와 <strong>같은 파라미터</strong>로 계산하고, 미니배치 끝에서 M개 조각의 기울기를 모두 더해 모든 장치가 동시에 한 번 갱신합니다(2.2절). 갱신이 한 번뿐이므로 그 사이에 가중치가 바뀌는 일이 없습니다.</p>
+
+<div class="demo">
+  <h4>데모 3 · K개 장치, M개 마이크로배치의 타임라인</h4>
+  <p class="cap">칸 안의 숫자는 마이크로배치 번호 m입니다(논문 그림의 F<sub>k,m</sub>, B<sub>k,m</sub>). 각 칸은 바로 앞 의존이 끝나야 시작합니다. F<sub>k,m</sub>은 F<sub>k−1,m</sub>을, B<sub>k,m</sub>은 B<sub>k+1,m</sub>을 기다립니다. ▶ 재생을 누르면 시간이 흐르고, 세로선 위치에서 일하는 장치 수가 아래에 나옵니다. K = 4, M = 4가 논문 그림 2c입니다.</p>
+  <div class="btns">
+    <button type="button" id="d3play">▶ 재생</button>
+    <button type="button" id="d3fig">그림 2c (K = 4, M = 4, B = F)</button>
+    <button type="button" id="d3naive">M = 1로 (단순 모델 병렬)</button>
+    <button type="button" id="d3many">M = 4K로</button>
+  </div>
+  <div class="ctrls">
+    <div class="ctrl"><label>장치 수 K <b id="d3Kv"></b></label><input type="range" id="d3K" min="1" max="8" step="1" value="4"></div>
+    <div class="ctrl"><label>마이크로배치 수 M <b id="d3Mv"></b></label><input type="range" id="d3M" min="1" max="32" step="1" value="8"></div>
+    <div class="ctrl"><label>역전파 ÷ 순전파 <b id="d3rv"></b></label><input type="range" id="d3r" min="1" max="3" step="0.1" value="2"></div>
+    <div class="ctrl"><label>시간 <b id="d3tv"></b></label><input type="range" id="d3t" min="0" max="1" step="0.001" value="1"></div>
+  </div>
+  <canvas id="d3cv" height="230"></canvas>
+  <canvas id="d3u" height="60" style="margin-top:6px"></canvas>
+  <div class="legend"><span><i style="background:var(--s1)"></i>순전파 F</span><span><i style="background:var(--s2)"></i>역전파 B</span><span><i style="background:var(--s3)"></i>동기식 갱신</span><span><i style="background:var(--axis)"></i>아래: 그 순간 일하는 장치 수</span></div>
+  <div class="readout" id="d3out"></div>
+</div>
+<p>M = 1에서는 데모 2와 똑같이 계단 하나가 올라갔다 내려옵니다. M을 키우면 계단의 경사는 그대로인데 가운데 <strong>모든 장치가 동시에 일하는 구간</strong>이 길어집니다. 비어 있는 칸은 두 삼각형, 순전파가 파이프라인을 채우는 동안의 왼쪽 위와 역전파가 비워 나가는 오른쪽 아래, 그리고 순전파와 역전파 사이에 끼인 가운데 부분에만 남습니다. 논문은 이 빈 공간을 <strong>버블</strong>이라고 부릅니다.</p>
+
+<!-- ───────── 4 ───────── -->
+<h2 id="s4">4. 버블은 얼마나 남는가</h2>
+<p>모든 셀의 계산 시간이 같다고 두고 세어 봅니다. 한 장치가 마이크로배치 하나의 F에 t<sub>F</sub>, B에 t<sub>B</sub>를 씁니다. 장치 k의 첫 F는 앞 장치 k개가 첫 조각을 넘겨줄 때까지 기다려야 하므로 k·t<sub>F</sub> 늦게 시작하고, 마지막 장치는 (K−1)·t<sub>F</sub> 늦게 시작합니다. 순전파가 모두 끝나는 데 (M + K − 1)·t<sub>F</sub>, 역전파도 같은 이유로 (M + K − 1)·t<sub>B</sub>입니다. 그동안 장치 하나가 실제로 일한 시간은 M·(t<sub>F</sub> + t<sub>B</sub>)입니다.</p>
+<div class="eq">
+  $$\text{버블 비율} = 1 - \frac{M\,(t_F+t_B)}{(M+K-1)\,(t_F+t_B)} = \frac{K-1}{M+K-1}$$
+  <span class="note">2.3절은 이것을 O((K−1)/(M+K−1))로 적습니다. t<sub>B</sub>/t<sub>F</sub> 비율이 지워지므로 역전파가 순전파보다 몇 배 느리든 상관없습니다. 데모 3에서 역전파 비율 슬라이더를 움직여도 버블 비율이 바뀌지 않는 것을 확인할 수 있습니다.</span>
+</div>
+<p>논문은 실험에서 <strong>M ≥ 4K</strong>이면 버블이 무시할 만했다고 보고합니다. 다만 위 식을 그대로 넣으면 M = 4K일 때 (K−1)/(5K−1)이라 K = 8에서 18%, K가 커지면 20%에 다가가서 “무시할 만하다”고 하기에는 큰 값입니다. 논문은 그 이유의 일부로, 재계산(6절)을 쓰면 역전파 앞부분의 순전파 재계산은 위쪽 셀의 기울기를 기다릴 필요가 없어 버블 안으로 <strong>미리 당겨 할 수 있다</strong>는 점을 듭니다. 실제 측정은 아래 표 2처럼 식보다 나은 경우가 있습니다.</p>
+
+<div class="demo">
+  <h4>데모 4 · M과 K에 따른 버블, 그리고 표 2</h4>
+  <p class="cap">곡선은 K = 2, 4, 8, 16에서 버블 비율 (K−1)/(M+K−1)입니다(가로축 M은 로그 눈금). 점선은 M = 4K 지점입니다. 아래 표는 논문 표 2의 Transformer-48 처리량(K = 2, M = 1을 1로 둔 상대값)과, 같은 기준으로 맞춘 이상적인 모형 K·M/(M+K−1)을 나란히 둡니다.</p>
+  <div class="ctrls">
+    <div class="ctrl"><label>장치 수 K <b id="d4Kv"></b></label><input type="range" id="d4K" min="1" max="6" step="1" value="3"></div>
+    <div class="ctrl"><label>마이크로배치 수 M <b id="d4Mv"></b></label><input type="range" id="d4M" min="0" max="7" step="1" value="5"></div>
+  </div>
+  <canvas id="d4cv" height="240"></canvas>
+  <div class="readout" id="d4out"></div>
+  <div class="tw" style="margin-bottom:0"><table>
+    <thead><tr><th>Transformer-48</th><th class="num">K = 2</th><th class="num">K = 4</th><th class="num">K = 8</th></tr></thead>
+    <tbody id="d4tab"></tbody>
+  </table></div>
+  <p class="mini">각 칸: 논문 측정값 <span class="vs">/ 모형</span>. 논문 표 2 주석대로 배치 크기는 메모리에 맞게 조정되었을 수 있습니다.</p>
+</div>
+<p>M = 32 행은 모형과 8% 안에서 맞습니다. K를 2에서 8로 4배 늘렸을 때 1.8 → 6.3, 즉 <strong>3.5배</strong>라는 논문의 말이 여기서 나옵니다. M = 4 행은 측정이 모형보다 훨씬 높은데, 위에서 말한 재계산의 앞당김과 배치 크기 조정이 섞였을 것으로 보입니다. M = 1 행의 K = 8 값 1.3은 모형(1.0)이 설명하지 못합니다. 논문도 이 행에 대해서는 “장치 수와 상관없이 처리량이 비교적 일정하다”고만 적었습니다.</p>
+<p class="note">이후 논문들(Megatron-LM 등)은 버블을 전체 시간에 대한 비율이 아니라 <strong>이상적인 계산 시간에 대한 비율</strong>로 (K−1)/M이라고 적습니다. 분모가 다를 뿐 같은 양입니다. 위 readout에 둘 다 표시했습니다.</p>
+
+<!-- ───────── 5 ───────── -->
+<h2 id="s5">5. 고르게 자르기: 분할과 불균형</h2>
+<p>4절의 식은 모든 셀이 똑같이 오래 걸린다는 가정 위에 있습니다. 실제로는 그렇지 않습니다. 파이프라인은 가장 느린 셀의 속도로 흐르기 때문에, 다른 셀들은 그 셀을 기다리며 놉니다. 그래서 GPipe는 층별 비용 추정치 c<sub>l</sub>로 셀 비용 C<sub>k</sub>를 구하고, 셀 비용들의 <strong>분산이 최소가 되도록</strong> 자릅니다(2.2절). 셀 비용의 합은 자르는 방식과 상관없이 같으므로, 분산을 최소화하는 것은 제곱합 Σ C<sub>k</sub>²를 최소화하는 것과 같고, 연속 구간 분할이라 동적 계획법으로 정확히 풀 수 있습니다.</p>
+
+<div class="demo">
+  <h4>데모 5 · 24개 층을 K개 셀로 자르기</h4>
+  <p class="cap">막대는 층별 계산 비용입니다(색 = 셀). 비용 모양 버튼 중 균등은 모든 층이 같은 Transformer형이고, 나머지 둘은 설명을 위해 만든 가상의 프로파일입니다(AmoebaNet의 실제 층별 비용이 아닙니다). 아래 막대는 셀별 비용 합이고, 점선이 가장 느린 셀입니다.</p>
+  <div class="btns">
+    <span class="seg" id="d5shape"><button type="button" data-v="flat" aria-pressed="true">균등</button><button type="button" data-v="ramp">뒤로 갈수록 무거움</button><button type="button" data-v="rand">들쭉날쭉</button></span>
+    <span class="seg" id="d5meth"><button type="button" data-v="eq">층 수로 똑같이</button><button type="button" data-v="dp" aria-pressed="true">비용 분산 최소화</button></span>
+    <button type="button" id="d5new">다른 들쭉날쭉</button>
+  </div>
+  <div class="ctrls">
+    <div class="ctrl"><label>셀 수 K <b id="d5Kv"></b></label><input type="range" id="d5K" min="1" max="8" step="1" value="4"></div>
+  </div>
+  <canvas id="d5cv" height="250"></canvas>
+  <div class="readout" id="d5out"></div>
+</div>
+<p>“층 수로 똑같이”에 뒤로 갈수록 무거운 비용을 주면 마지막 셀이 다른 셀의 몇 배가 되고, 이상적인 가속이 K보다 한참 낮아집니다. 분산 최소화로 바꾸면 앞쪽 셀은 층을 많이, 뒤쪽 셀은 적게 가져가 다시 고르게 됩니다. 그래도 층 하나보다 잘게 자를 수는 없어서, 무거운 층이 하나 있으면 그 층이 상한이 됩니다. 논문은 AmoebaNet의 가속이 선형에 못 미친 이유(표 2에서 K = 8, M = 32일 때 Transformer 6.3, AmoebaNet 3.48)와 최대 모델 크기가 장치 수에 비례해 늘지 않은 이유(표 1)를 모두 <strong>층마다 파라미터와 계산이 고르지 않은 것</strong>에서 찾고, 더 나은 분할 알고리즘이 성능을 올릴 여지가 있다고 적었습니다.</p>
+
+<!-- ───────── 6 ───────── -->
+<h2 id="s6">6. 재계산으로 활성 메모리 갚기</h2>
+<p>역전파에서 층 i의 기울기 b<sub>i</sub>를 구하려면 위층에서 내려온 기울기 b<sub>i+1</sub>과 함께 순전파 때의 활성 f<sub>i</sub>(x)가 필요합니다. 그래서 보통은 순전파 동안 모든 층의 활성을 남겨 두고, 그 메모리는 <strong>O(N × L)</strong>입니다. 파이프라인에서는 사정이 더 나쁩니다. 장치 0은 첫 마이크로배치의 역전파가 돌아올 때까지 M개 조각의 활성을 모두 들고 있어야 합니다.</p>
+<p>GPipe는 Chen et al.(2016)의 <strong>재계산</strong>(re-materialization, gradient checkpointing이라고도 부릅니다)을 장치마다 적용합니다. 순전파 때는 셀 경계의 출력만 저장하고 셀 내부 활성은 버립니다. 역전파 차례가 오면 저장해 둔 경계 입력으로 F<sub>k</sub>를 다시 계산해 내부 활성을 복원하고, 그 마이크로배치의 역전파가 끝나면 다시 버립니다.</p>
+<div class="eq">
+  $$\underbrace{O(N \times L)}_{\text{재계산, 분할 없음}} \quad\longrightarrow\quad O\!\Big(N + \frac{L}{K}\times\frac{N}{M}\Big)$$
+  <span class="note">2.3절. 앞의 N은 M개 마이크로배치 각각의 경계 입력(N/M × M), 뒤의 항은 지금 역전파 중인 마이크로배치 하나(N/M개 예제)의 셀 내부 활성(L/K개 층)입니다. 이 데모에서는 “예제 하나가 층 하나에서 남기는 활성”을 1칸으로 셉니다.</span>
+</div>
+
+<div class="demo">
+  <h4>데모 6 · 한 장치가 들고 있는 활성, 시간에 따라</h4>
+  <p class="cap">데모 3과 같은 GPipe 스케줄을 돌리면서 고른 장치의 활성 메모리를 시간에 따라 그립니다. 재계산을 켜면 역전파마다 순전파를 한 번 더 하므로(보라색) 한 스텝이 길어집니다.</p>
+  <div class="btns"><label class="chk"><input type="checkbox" id="d6rm" checked> 재계산 켜기</label></div>
+  <div class="ctrls">
+    <div class="ctrl"><label>층 수 L <b id="d6Lv"></b></label><input type="range" id="d6L" min="8" max="64" step="8" value="32"></div>
+    <div class="ctrl"><label>장치 수 K <b id="d6Kv"></b></label><input type="range" id="d6K" min="1" max="8" step="1" value="4"></div>
+    <div class="ctrl"><label>마이크로배치 수 M <b id="d6Mv"></b></label><input type="range" id="d6M" min="0" max="5" step="1" value="3"></div>
+    <div class="ctrl"><label>보는 장치 <b id="d6dv"></b></label><input type="range" id="d6d" min="0" max="7" step="1" value="0"></div>
+  </div>
+  <canvas id="d6tl" height="150"></canvas>
+  <canvas id="d6cv" height="170" style="margin-top:8px"></canvas>
+  <div class="legend"><span><i style="background:var(--s1)"></i>저장된 활성</span><span><i style="background:var(--s4)"></i>재계산으로 잠깐 복원한 활성</span><span><i style="background:var(--muted)"></i>재계산 없이 (비교용)</span></div>
+  <div class="readout" id="d6out"></div>
+</div>
+<p>재계산이 없으면 M을 키워도 정점은 N·L/K로 그대로입니다. 마이크로배치를 쪼개도 결국 M개 조각을 전부 들고 있어야 하니까요. 재계산을 켜면 정점이 N + (L/K)(N/M)으로 내려가고, 이제 <strong>M을 키울수록 둘째 항이 줄어듭니다.</strong> 버블을 줄이려고 키운 M이 메모리까지 줄여 주는 셈입니다. 이것이 6절 끝에서 논문이 “재계산과 결합하면 많은 수의 마이크로배치로 확장할 수 있다”고 말하는 이유입니다. 대가는 시간입니다. 역전파가 순전파의 두 배라면 재계산은 계산량을 3 → 4, 약 33% 늘립니다.</p>
+<p>이 효과는 장치 하나에서도 나타납니다. 표 1의 Pipeline-1 열은 장치 1대에 재계산과 배치 쪼개기만 적용한 경우인데, AmoebaNet의 활성 메모리가 6.26GB에서 3.46GB로 줄어 82M 대신 318M 모델이 들어갔고, Transformer는 2.7배 큰 모델(3층 → 13층)이 들어갔습니다.</p>
+
+<!-- ───────── 7 ───────── -->
+<h2 id="s7">7. 쪼개도 같은 기울기: 동기식 누적</h2>
+<p>마이크로배치로 쪼갠 뒤 기울기를 더하는 것이 왜 원래 미니배치의 기울기와 같은지는 손실의 정의에서 바로 나옵니다. 미니배치 손실은 예제별 손실의 평균이고, 미분은 덧셈을 지나갑니다.</p>
+<div class="eq">
+  $$\nabla_\theta \frac{1}{N}\sum_{n=1}^{N}\ell_n(\theta) \;=\; \sum_{m=1}^{M}\;\underbrace{\frac{1}{N}\sum_{n\in\text{조각 }m}\nabla_\theta\,\ell_n(\theta)}_{\text{마이크로배치 } m \text{의 기여}}$$
+  <span class="note">조건은 하나, 모든 조각의 기울기를 <strong>같은 θ</strong>에서 계산하는 것입니다. GPipe는 미니배치가 끝날 때까지 갱신하지 않으므로 이 조건이 지켜집니다. 그래서 논문은 “분할 수와 상관없이 기울기 갱신이 일관된다”고 말합니다(1절, 7절).</span>
+</div>
+<p>예외는 배치 전체를 보는 층입니다. BatchNorm은 학습 중 통계를 미니배치가 아니라 <strong>마이크로배치마다</strong> 계산하게 되므로 결과가 달라집니다. 논문은 이 경우 통계를 마이크로배치(필요하면 복제본들)에 대해 계산하고, 평가용 이동 평균은 미니배치 전체에 대해 따로 추적한다고 밝힙니다(2.2절).</p>
+
+<div class="demo">
+  <h4>데모 7 · 브라우저에서 학습시켜 비교하기</h4>
+  <p class="cap">2 → 16 → 16 → 16 → 1 MLP(tanh, 마지막은 시그모이드)를 두 개의 반달 데이터 64점으로 학습합니다. 층 4개를 “장치” 4개에 하나씩 두었다고 보고, 같은 초기값에서 네 방법을 나란히 돌립니다. ① 한 장치·미니배치 전체, ② GPipe(마이크로배치 M개를 순전파 → 역순 역전파 → 기울기 누적 → 한 번 갱신), ③ 마이크로배치마다 바로 갱신(학습률 ÷ M), ④ d스텝 전의 가중치로 계산한 기울기로 갱신(비동기 파이프라인의 지연). 학습률 0.3, 400스텝.</p>
+  <div class="btns">
+    <button type="button" id="d7go">▶ 학습</button>
+    <button type="button" id="d7reset">초기화</button>
+  </div>
+  <div class="ctrls">
+    <div class="ctrl"><label>마이크로배치 수 M <b id="d7Mv"></b></label><input type="range" id="d7M" min="0" max="6" step="1" value="3"></div>
+    <div class="ctrl"><label>④의 지연 d (스텝) <b id="d7dv"></b></label><input type="range" id="d7d" min="1" max="8" step="1" value="3"></div>
+  </div>
+  <div class="split">
+    <canvas id="d7cv" height="230"></canvas>
+    <canvas id="d7bd" height="230"></canvas>
+  </div>
+  <div class="legend"><span><i style="background:var(--text-primary)"></i>① 한 장치</span><span><i style="background:var(--s1)"></i>② GPipe</span><span><i style="background:var(--s2)"></i>③ 조각마다 갱신</span><span><i style="background:var(--s4)"></i>④ 지연된 기울기</span><span>격자 그림: ② 모델의 결정 경계</span></div>
+  <div class="readout" id="d7out"></div>
+</div>
+<p>②의 손실 곡선은 ①과 정확히 겹치고, 두 모델 가중치의 최대 차이는 10<sup>−15</sup> 근처입니다. 덧셈 순서가 달라서 생기는 부동소수점 반올림 차이일 뿐입니다. M을 바꿔 다시 돌려도 마찬가지입니다. ③은 M에 따라 다른 경로로 학습됩니다. 더 빨리 내려갈 때도 있지만 그건 “다른 알고리즘”이라는 뜻이고, 장치 수를 바꿀 때마다 하이퍼파라미터를 다시 맞춰야 한다는 뜻이기도 합니다. ④는 9절의 PipeDream이 피하려고 애쓴 문제를 보여 줍니다. 지연 d를 키우면 손실이 출렁이거나 잘 내려가지 않습니다.</p>
+<p class="note">이 계산이 정확히 같으려면 층에 배치 통계가 없어야 합니다. 이 MLP에는 BatchNorm이 없습니다. 또 학습률을 크게 올리면 학습이 혼돈스러워져 10<sup>−15</sup>의 반올림 차이도 수백 스텝 뒤 눈에 보이게 커질 수 있습니다. 수학은 같아도 부동소수점 결과까지 비트 단위로 같다는 보장은 아닙니다.</p>
+
+<!-- ───────── 8 ───────── -->
+<h2 id="s8">8. 논문의 결과</h2>
+<h3>얼마나 큰 모델이 들어갔나 (표 1)</h3>
+<p>AmoebaNet은 224 × 224 입력, 미니배치 128에서 장치당 8GB, Transformer는 앞의 설정으로 장치당 16GB에서 잰 값입니다. Naive-1은 GPipe 없는 한 장치, Pipeline-k는 GPipe로 k개 장치에 나눈 경우입니다.</p>
+<div class="demo">
+  <h4>데모 8 · 표 1을 장치당 메모리로 다시 보기</h4>
+  <p class="cap">막대는 (파라미터 메모리 + 정점 활성 메모리) ÷ 장치 수, 즉 장치 한 대가 평균적으로 들고 있는 양입니다. 점선은 장치 하나의 메모리입니다. 막대 위 숫자는 그 설정에서 올린 최대 파라미터 수입니다.</p>
+  <div class="btns"><span class="seg" id="d8m"><button type="button" data-v="a" aria-pressed="true">AmoebaNet-D (8GB)</button><button type="button" data-v="t">Transformer (16GB)</button></span></div>
+  <canvas id="d8cv" height="250"></canvas>
+  <div class="legend"><span><i style="background:var(--s1)"></i>파라미터 메모리 ÷ K</span><span><i style="background:var(--s2)"></i>정점 활성 메모리 ÷ K</span></div>
+  <div class="readout" id="d8out"></div>
+</div>
+<p>모든 열이 장치 메모리를 80~95%쯤 채운 곳에서 멈춰 있습니다. 표가 “들어가는 한 최대로 키운 모델”을 잰 것이니 당연한 모양입니다. Transformer는 층마다 크기가 같아서 장치 수에 정확히 비례해 커졌고(8 → 32 → 128장에서 103 → 415 → 1663층), 128장에서 한 장치 대비 <strong>298배</strong>인 839억 파라미터에 도달했습니다. AmoebaNet은 8장에서 18억으로, 논문 표현으로 GPipe 없이 가능한 것의 25배에 그쳤습니다. 층마다 파라미터가 고르지 않아 분할이 완벽하지 않았기 때문입니다(5절).</p>
+
+<h3>고속 연결 없이도 (표 3)</h3>
+<p>NVLink 없이 PCI-E로만 연결된 P100 GPU 여러 장에서 M = 32로 잰 처리량입니다. 장치 사이에 오가는 것이 셀 경계의 활성뿐이라 통신 대역폭이 병목이 되지 않았고, 가속은 TPU에서와 비슷했습니다.</p>
+<div class="tw"><table>
+  <thead><tr><th>GPU, M = 32</th><th class="num">K = 2</th><th class="num">K = 4</th><th class="num">K = 8</th></tr></thead>
+  <tbody>
+  <tr><td>AmoebaNet-D (18, 128)</td><td class="num">1</td><td class="num">1.7</td><td class="num">2.7</td></tr>
+  <tr><td>Transformer-24</td><td class="num">1</td><td class="num">1.8</td><td class="num">3.3</td></tr>
+  </tbody>
+</table></div>
+
+<h3>키운 모델로 얻은 것: 이미지 분류 (4절, 표 4)</h3>
+<p>AmoebaNet-B(18, 512)를 채널 수를 늘리고 입력을 480 × 480으로 키워 5억 5,700만 파라미터로 만들고, 4개 파티션으로 나눠 ImageNet을 학습했습니다. 단일 크롭 top-1 <strong>84.4%</strong>, top-5 97%입니다. 이 모델을 다른 데이터셋에 미세 조정한 결과(5회 평균)는 다음과 같습니다.</p>
+<div class="tw"><table>
+  <thead><tr><th>데이터셋</th><th class="num">학습</th><th class="num">클래스</th><th class="num">GPipe (%)</th><th class="num">이전 최고 (%)</th></tr></thead>
+  <tbody>
+  <tr><td>ImageNet-2012</td><td class="num">1,281,167</td><td class="num">1000</td><td class="num hi">84.4</td><td class="num">83.9 (비공개 데이터로 85.4*)</td></tr>
+  <tr><td>CIFAR-10</td><td class="num">50,000</td><td class="num">10</td><td class="num hi">99.0</td><td class="num">98.5</td></tr>
+  <tr><td>CIFAR-100</td><td class="num">50,000</td><td class="num">100</td><td class="num hi">91.3</td><td class="num">89.3</td></tr>
+  <tr><td>Stanford Cars</td><td class="num">8,144</td><td class="num">196</td><td class="num">94.6</td><td class="num">94.8*</td></tr>
+  <tr><td>Oxford Pets</td><td class="num">3,680</td><td class="num">37</td><td class="num hi">95.9</td><td class="num">93.8*</td></tr>
+  <tr><td>Food-101</td><td class="num">75,750</td><td class="num">101</td><td class="num hi">93.0</td><td class="num">90.4*</td></tr>
+  <tr><td>FGVC Aircraft</td><td class="num">6,667</td><td class="num">100</td><td class="num">92.7</td><td class="num">92.9*</td></tr>
+  <tr><td>Birdsnap</td><td class="num">47,386</td><td class="num">500</td><td class="num hi">83.6</td><td class="num">80.2*</td></tr>
+  </tbody>
+</table></div>
+<p class="mini">표 4. 별표(*)는 논문 표기를 그대로 옮긴 것입니다. ImageNet의 85.4%는 비공개 Instagram 데이터로 사전학습한 Mahajan et al.의 결과입니다.</p>
+
+<h3>키운 모델로 얻은 것: 다국어 번역 (5절, 표 5)</h3>
+<p>102개 언어 ↔ 영어, 언어당 10<sup>4</sup>~10<sup>9</sup>개, 총 250억 개의 문장 쌍으로 Transformer <strong>하나</strong>를 학습했습니다. 4억 파라미터의 T(6, 8192, 16)에서 시작해 깊게(T(24, 8192, 16), 13억), 넓게(T(12, 16384, 32), 13억), 그리고 30억(T(32, 16384, 32))과 60억(T(64, 16384, 32))까지 키웠고, 큰 모델들은 2·4·8·16개 가속기에 나눴습니다. T(L, H, A)는 인코더·디코더 각 L층, 피드포워드 차원 H, 어텐션 헤드 A이고 모델 차원은 1024로 고정입니다.</p>
+<ul>
+  <li><strong>용량</strong> — 4억 → 13억에서 모든 언어가 크게 좋아졌고, 13억 → 60억은 고자원 언어에서 더 좋아졌지만 수확은 줄어들었습니다(그림 3). 60억 모델 하나가 언어쌍 100개에서 각각 따로 학습한 3억 5,000만 파라미터 이중 언어 모델보다 나았습니다.</li>
+  <li><strong>깊이 대 너비</strong> — 같은 13억에서 고자원 언어는 비슷했지만 저자원 언어는 깊은 모델이 큰 차이로 앞섰습니다. 논문은 깊이가 일반화와 전이에 더 나을 수 있다고 해석합니다.</li>
+  <li><strong>깊은 모델의 학습 불안정</strong> — 수천 스텝 뒤 예측이 지나치게 뾰족해지며 기울기가 폭발했습니다. 피드포워드 층 초기화를 층 수로 줄이고(Fixup을 따름), 소프트맥스 직전 로짓의 크기를 잘라 막았습니다.</li>
+  <li><strong>큰 배치</strong> — 독일어→영어에서 배치를 토큰 26만 → 100만 → 400만으로 키우자 BLEU 30.92 → 31.86 → 32.71, 검증 NLL 2.58 → 2.51 → 2.46으로 좋아졌습니다(표 5). 저자들이 아는 한 NMT에서 쓰인 가장 큰 배치였습니다.</li>
+</ul>
+
+<!-- ───────── 9 ───────── -->
+<h2 id="s9">9. 다른 병렬화와 비교: 데이터·텐서 병렬, PipeDream, 1F1B</h2>
+<p>논문 6절은 대규모 모델 병렬의 여러 접근을 “각자 다른 절충을 골랐다”는 관점에서 비교합니다. 여기에 논문 이후에 자리 잡은 1F1B 스케줄까지 더해 정리합니다.</p>
+<div class="tw"><table>
+  <thead><tr><th>방식</th><th>무엇을 나누나</th><th>장치 사이 통신</th><th>한계</th></tr></thead>
+  <tbody>
+  <tr><td><strong>데이터 병렬</strong></td><td>배치 (모델은 장치마다 통째로 복제)</td><td>스텝마다 기울기 전체를 AllReduce</td><td>모델 전체가 한 장치에 들어가야 함. 단순해서 가장 널리 쓰임</td></tr>
+  <tr><td><strong>텐서 병렬</strong> (SPMD, Mesh-TensorFlow)</td><td>층 하나의 행렬곱</td><td>층마다 AllReduce 계열 연산이 많음</td><td>고속 연결이 필요. 합성곱처럼 나누기 까다로운 연산이 있음. 깊이를 키우려면 층마다 더 잘게 나눠야 해서 통신이 더 늘어남</td></tr>
+  <tr><td><strong>GPipe</strong></td><td>층의 순서열 (+ 배치를 마이크로배치로)</td><td>셀 경계의 활성만, 마이크로배치마다</td><td>층 하나는 한 장치에 들어가야 함. 배치 통계를 쓰는 층은 따로 처리. 버블</td></tr>
+  <tr><td><strong>PipeDream</strong></td><td>층의 순서열</td><td>셀 경계의 활성</td><td>순전파와 역전파를 섞어 비동기로 갱신해 가중치가 낡음. 장치마다 여러 버전의 가중치를 보관해야 해서 큰 모델로 키우기 어려움</td></tr>
+  </tbody>
+</table></div>
+<p>GPipe가 셋째 줄에서 내세우는 것은 두 가지입니다. 통신이 셀 경계에서만 일어나 고속 연결이 없어도 되고(표 3), 갱신이 동기식이라 7절처럼 결과가 분할 방식과 무관합니다. 각주 3에서는 층 하나가 한 장치에 안 들어가는 한계를 피하는 방법으로 큰 행렬곱을 작은 것들로 쪼개 여러 층에 나눠 두는 것을 제안합니다. 실제로 이후의 초거대 모델 학습은 데이터·텐서·파이프라인 병렬을 <strong>함께</strong> 쓰는 쪽으로 갔습니다(Megatron-LM, 2021).</p>
+<h3>1F1B: 같은 버블, 더 적은 활성</h3>
+<p>GPipe 스케줄은 M개 조각의 순전파를 모두 끝낸 뒤에야 역전파를 시작하므로, 장치 0은 M개 조각의 경계 활성을 한꺼번에 들고 있습니다. PipeDream이 쓴 <strong>1F1B</strong>(one-forward-one-backward) 순서는 파이프라인이 찬 뒤로 순전파 하나, 역전파 하나를 번갈아 합니다. 역전파가 일찍 시작되니 끝난 조각의 활성을 일찍 버릴 수 있습니다. PipeDream은 이것을 비동기로 돌렸지만, 미니배치 끝에서 파이프라인을 비우고(flush) 한 번에 갱신하면 GPipe와 같은 동기식 학습이 됩니다(PipeDream-Flush, Narayanan et al. 2021).</p>
+
+<div class="demo">
+  <h4>데모 9 · GPipe 순서와 1F1B 순서</h4>
+  <p class="cap">위는 GPipe(F 전부 → B 전부), 아래는 1F1B(장치 k는 K−1−k개의 F로 파이프라인을 채운 뒤 F·B 교대). 두 스케줄 모두 미니배치 끝에 동기식으로 갱신합니다. 오른쪽 숫자는 그 장치가 동시에 활성을 들고 있던 마이크로배치의 최대 개수입니다.</p>
+  <div class="ctrls">
+    <div class="ctrl"><label>장치 수 K <b id="d9Kv"></b></label><input type="range" id="d9K" min="2" max="8" step="1" value="4"></div>
+    <div class="ctrl"><label>마이크로배치 수 M <b id="d9Mv"></b></label><input type="range" id="d9M" min="1" max="24" step="1" value="12"></div>
+  </div>
+  <h5 style="margin:8px 0 4px;font-size:13px;color:var(--text-secondary)">GPipe</h5>
+  <canvas id="d9a" height="170"></canvas>
+  <h5 style="margin:12px 0 4px;font-size:13px;color:var(--text-secondary)">1F1B (동기식, flush)</h5>
+  <canvas id="d9b" height="170"></canvas>
+  <div class="readout" id="d9out"></div>
+</div>
+<p>두 타임라인의 길이는 같습니다. 버블은 둘 다 (K−1)/(M+K−1)입니다. 다른 것은 오른쪽 숫자입니다. GPipe는 모든 장치가 M개를, 1F1B는 장치 k가 K−k개 이하를 들고 있습니다. M을 24까지 올려도 1F1B의 장치 0은 K개에서 멈춥니다. 그래서 버블을 줄이려고 M을 크게 잡을 때 1F1B는 활성 메모리가 M과 무관해지고, 이후의 파이프라인 병렬 구현은 대부분 이 순서를 씁니다. 반대로 GPipe는 이 부담을 재계산(6절)으로 줄였습니다. 두 방법은 함께 쓸 수도 있습니다.</p>
+<p>같은 시리즈의 <a href="https://dev-jonghoonpark.github.io/how-sgd-works/">How SGD Works</a>는 미니배치 기울기를, <a href="https://dev-jonghoonpark.github.io/how-adam-works/">How Adam Works</a>는 옵티마이저 상태가 학습 메모리에서 차지하는 몫을, <a href="https://dev-jonghoonpark.github.io/how-transformer-works/">How Transformer Works</a>는 이 페이지가 파라미터를 센 Transformer 블록을 다룹니다.</p>
+
+<!-- ───────── 10 ───────── -->
+<h2 id="s10">10. 확인 퀴즈</h2>
+<div id="quiz"></div>
+<p class="quiz-score" id="quizScore"></p>
+
+<section class="footnotes" aria-label="각주">
+<h2>각주</h2>
+<ol>
+<li id="fn1">
+<p><strong>표 1의 두 군데 어긋남.</strong> Transformer Naive-1 열은 파라미터 메모리 11.7G, 정점 활성 3.15G로 적혀 있습니다. 그런데 282.2M × 12바이트 = 3.15GiB이고, 다른 네 열은 모두 “파라미터 수 × 12바이트”가 파라미터 메모리 칸과 맞습니다(785.8M → 8.8G, 5.3B → 59.5G …). 이 열만 두 행이 뒤바뀐 것으로 보이고, 이 페이지는 파라미터 3.15G, 활성 11.7G로 읽었습니다. 합(14.85G)은 어느 쪽으로 읽어도 같아서 데모 8의 막대 높이에는 영향이 없습니다.</p>
+<p>또 표 1 머리에는 AmoebaNet 쪽이 “NVIDIA GPUs (8GB each)”로 적혀 있지만 본문 3절은 같은 실험을 “8GB 메모리의 Cloud TPUv2”에서 했다고 적습니다. 어느 쪽이든 장치당 8GB라는 점은 같습니다. <a class="back" href="#fnref1" aria-label="본문으로 돌아가기">↩</a></p>
+</li>
+</ol>
+</section>
+
+<footer>
+<p><strong>참고 문헌</strong></p>
+<ul class="refs">
+<li>Huang, Cheng, Bapna, Firat, Chen, Chen, Lee, Ngiam, Le, Wu &amp; Chen (2019), <em>GPipe: Efficient Training of Giant Neural Networks using Pipeline Parallelism</em>, NeurIPS 2019 — <a href="https://arxiv.org/abs/1811.06965" target="_blank" rel="noopener">arXiv:1811.06965</a> (arXiv v5 제목은 <em>GPipe: Easy Scaling with Micro-Batch Pipeline Parallelism</em>)</li>
+<li>Chen, Xu, Zhang &amp; Guestrin (2016), <em>Training Deep Nets with Sublinear Memory Cost</em> — <a href="https://arxiv.org/abs/1604.06174" target="_blank" rel="noopener">arXiv:1604.06174</a></li>
+<li>Harlap et al. (2018), <em>PipeDream: Fast and Efficient Pipeline Parallel DNN Training</em> — <a href="https://arxiv.org/abs/1806.03377" target="_blank" rel="noopener">arXiv:1806.03377</a></li>
+<li>Shazeer et al. (2018), <em>Mesh-TensorFlow: Deep Learning for Supercomputers</em>, NeurIPS 2018 — <a href="https://arxiv.org/abs/1811.02084" target="_blank" rel="noopener">arXiv:1811.02084</a></li>
+<li>Narayanan, Phanishayee, Shi, Chen &amp; Zaharia (2021), <em>Memory-Efficient Pipeline-Parallel DNN Training</em>, ICML 2021 — PipeDream-2BW, PipeDream-Flush</li>
+<li>Narayanan et al. (2021), <em>Efficient Large-Scale Language Model Training on GPU Clusters Using Megatron-LM</em>, SC21 — <a href="https://arxiv.org/abs/2104.04473" target="_blank" rel="noopener">arXiv:2104.04473</a></li>
+</ul>
+<p style="margin-top:18px"><a href="https://github.com/dev-jonghoonpark/how-ai-works">how-ai-works</a> 시리즈 · 모든 계산은 브라우저에서 실시간으로 이루어집니다.</p>
+</footer>
+</div>
+<script>
+var $=function(s){return document.querySelector(s);};
+var cssCache={};
+function css(v){return v in cssCache?cssCache[v]:(cssCache[v]=getComputedStyle(document.documentElement).getPropertyValue(v).trim());}
+/* 모바일에서 캔버스 버퍼를 매번 새로 잡으면 메모리가 쌓여 탭이 죽는다.
+   크기가 같으면 기존 버퍼를 재사용하고, dpr은 2로 제한한다.
+   cv.height에 대입하면 height 속성도 바뀌므로 논리 높이는 data-h에 따로 둔다. */
+function setup(cv){
+  if(!cv.dataset.h)cv.dataset.h=cv.getAttribute('height');
+  var dpr=Math.min(2,window.devicePixelRatio||1), w=cv.clientWidth, h=+cv.dataset.h;
+  var bw=Math.round(w*dpr), bh=Math.round(h*dpr);
+  if(cv.width!==bw||cv.height!==bh){cv.width=bw;cv.height=bh;cv.style.height=h+'px';}
+  var c=cv.getContext('2d'); c.setTransform(dpr,0,0,dpr,0,0);
+  c.clearRect(0,0,w,h);
+  return {c:c,w:w,h:h};
+}
+function onFrame(fn){var q=false;return function(){if(q)return;q=true;requestAnimationFrame(function(){q=false;fn();});};}
+function hexA(hex,a){var n=parseInt(hex.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';}
+function fmt(x,d){return (+x).toFixed(d==null?2:d);}
+function fmtInt(n){return Math.round(n).toLocaleString('en-US');}
+function pct(x,d){return (x*100).toFixed(d==null?1:d)+'%';}
+function cl(x,a,b){return Math.max(a,Math.min(b,x));}
+function segInit(id,fn){var el=$(id);el.addEventListener('click',function(e){var b=e.target.closest('button');if(!b)return;
+  el.querySelectorAll('button').forEach(function(x){x.setAttribute('aria-pressed',x===b?'true':'false');});fn(b.dataset.v);});}
+function segVal(id){var b=$(id).querySelector('button[aria-pressed=true]');return b?b.dataset.v:null;}
+
+/* CORE-BEGIN */
+function rng(seed){return function(){seed|=0;seed=seed+0x6D2B79F5|0;var t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+function gauss(r){var u=1-r(),v=r();return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v);}
+
+/* 표 1 Transformer-L: d = 2048, h = 8192, V = 32000. 층 구성은 표 1의 다섯 값에 맞춘 재구성 */
+var TF={d:2048,h:8192,V:32000};
+function tfLayer(){var d=TF.d,h=TF.h;return (4*d*d+4*d)+(2*d*h+h+d)+4*d;}
+function tfParams(L){return 2*TF.V*TF.d+L*tfLayer();}
+var GiB=Math.pow(2,30);
+
+/* 버블: 셀 시간이 모두 같을 때 */
+function bubbleFrac(K,M){return (K-1)/(M+K-1);}
+function idealThr(K,M){return K*M/(M+K-1);}
+
+/* 파이프라인 스케줄 시뮬레이터.
+   장치마다 정해진 순서대로 연산을 놓고, 각 연산은 (장치가 비는 시각, 의존 연산이 끝난 시각) 중 늦은 쪽에 시작한다.
+   F(k,m)은 F(k-1,m)을, B(k,m)은 B(k+1,m)을(마지막 장치는 자기 F(k,m)을) 기다린다. */
+function simulate(K,M,o){
+  o=o||{};var sched=o.sched||'gpipe',br=o.bRatio==null?2:o.bRatio,remat=!!o.remat;
+  var tF=[],tB=[],rc=[],k,m;
+  for(k=0;k<K;k++){tF[k]=o.cost?o.cost[k]:1;rc[k]=remat?tF[k]:0;tB[k]=tF[k]*br+rc[k];}
+  var orders=[];
+  for(k=0;k<K;k++){var a=[];
+    if(sched==='gpipe'){for(m=0;m<M;m++)a.push(['F',m]);for(m=M-1;m>=0;m--)a.push(['B',m]);}
+    else{var w=Math.min(K-1-k,M),nf=0,nb=0;for(;nf<w;nf++)a.push(['F',nf]);
+      while(nf<M){a.push(['F',nf++]);a.push(['B',nb++]);}while(nb<M)a.push(['B',nb++]);}
+    orders.push(a);}
+  var fF=[],fB=[];for(k=0;k<K;k++){fF.push(new Array(M).fill(-1));fB.push(new Array(M).fill(-1));}
+  var ptr=new Array(K).fill(0),free=new Array(K).fill(0),ops=[],left=2*K*M;
+  while(left>0){var prog=false;
+    for(k=0;k<K;k++){while(ptr[k]<orders[k].length){var op=orders[k][ptr[k]],mm=op[1],dep;
+      if(op[0]==='F')dep=k===0?0:fF[k-1][mm];else dep=k===K-1?fF[k][mm]:fB[k+1][mm];
+      if(dep<0)break;
+      var s=Math.max(free[k],dep),e=s+(op[0]==='F'?tF[k]:tB[k]);
+      if(op[0]==='F')fF[k][mm]=e;else fB[k][mm]=e;
+      ops.push({k:k,m:mm,t:op[0],s:s,e:e,rc:op[0]==='B'?rc[k]:0});free[k]=e;ptr[k]++;left--;prog=true;}}
+    if(!prog)break;}
+  var span=Math.max.apply(null,free),busy=0;for(k=0;k<K;k++)busy+=M*(tF[k]+tB[k]);
+  return {K:K,M:M,ops:ops,span:span,busy:busy,bubble:1-busy/(K*span),tF:tF,tB:tB};
+}
+/* 장치 k가 활성을 들고 있는 마이크로배치 수의 최대 (F 시작 ~ B 끝) */
+function inflightPeak(sim,k){var ev=[];sim.ops.forEach(function(o){if(o.k!==k)return;if(o.t==='F')ev.push([o.s,1]);else ev.push([o.e,-1]);});
+  ev.sort(function(a,b){return a[0]-b[0]||a[1]-b[1];});var c=0,p=0;ev.forEach(function(e){c+=e[1];p=Math.max(p,c);});return p;}
+/* 활성 메모리 추적. 단위: 예제 1개가 층 1개에서 남기는 활성.
+   l = 장치당 층 수, b = 마이크로배치 크기.
+   재계산 없음: F가 끝나면 l·b를 저장, 그 조각의 B가 끝나면 해제.
+   재계산: F가 끝나면 경계 입력 b만 저장, B가 시작될 때 l·b를 복원했다가 B가 끝나면 둘 다 해제. */
+function memTrace(sim,k,l,b,remat){var ev=[];
+  sim.ops.forEach(function(o){if(o.k!==k)return;
+    if(o.t==='F')ev.push({t:o.e,ds:remat?b:l*b,dt:0});
+    else if(remat){ev.push({t:o.s,ds:0,dt:l*b});ev.push({t:o.e,ds:-b,dt:-l*b});}
+    else ev.push({t:o.e,ds:-l*b,dt:0});});
+  ev.sort(function(a,c){return a.t-c.t||(a.ds+a.dt)-(c.ds+c.dt);});
+  var s=0,tr=0,pk=0,pts=[[0,0,0]];
+  ev.forEach(function(e){s+=e.ds;tr+=e.dt;pts.push([e.t,s,tr]);pk=Math.max(pk,s+tr);});
+  return {pts:pts,peak:pk};}
+
+/* 연속 구간 분할: 셀 비용 제곱합(= 분산) 최소화, 동적 계획법 */
+function partitionDP(c,K){var L=c.length,P=[0],i,j,p;for(i=0;i<L;i++)P.push(P[i]+c[i]);
+  K=Math.min(K,L);var dp=[],cut=[];
+  for(j=0;j<=K;j++){dp.push(new Array(L+1).fill(Infinity));cut.push(new Array(L+1).fill(0));}
+  dp[0][0]=0;
+  for(j=1;j<=K;j++)for(i=j;i<=L;i++)for(p=j-1;p<i;p++){var v=dp[j-1][p]+(P[i]-P[p])*(P[i]-P[p]);if(v<dp[j][i]){dp[j][i]=v;cut[j][i]=p;}}
+  var bd=[L];i=L;for(j=K;j>0;j--){i=cut[j][i];bd.unshift(i);}return bd;}
+function partitionEq(L,K){var bd=[];for(var j=0;j<=K;j++)bd.push(Math.round(j*L/K));return bd;}
+function cellSums(c,bd){var s=[];for(var j=0;j<bd.length-1;j++){var t=0;for(var i=bd[j];i<bd[j+1];i++)t+=c[i];s.push(t);}return s;}
+
+/* 작은 MLP: 층 하나 = 장치 하나 */
+function makeData(N,seed){var r=rng(seed),X=[],Y=[];for(var i=0;i<N;i++){var c=i%2,a=Math.PI*r();
+  var x=c?1-Math.cos(a):Math.cos(a),y=c?0.5-Math.sin(a):Math.sin(a);X.push([x+0.12*gauss(r)-0.5,(y+0.12*gauss(r)-0.25)*1.6]);Y.push(c);}return {X:X,Y:Y};}
+function mlpInit(sz,seed){var r=rng(seed),net=[];for(var l=0;l<sz.length-1;l++){var n=sz[l],o=sz[l+1],W=[],b=[];
+  for(var j=0;j<o;j++){var row=[];for(var i=0;i<n;i++)row.push(gauss(r)*Math.sqrt(1/n));W.push(row);b.push(0);}net.push({W:W,b:b});}return net;}
+function cloneNet(net){return net.map(function(l){return {W:l.W.map(function(r){return r.slice();}),b:l.b.slice()};});}
+function zeroLike(net){return net.map(function(l){return {W:l.W.map(function(r){return r.map(function(){return 0;});}),b:l.b.map(function(){return 0;})};});}
+function fwdL(l,X,last){return X.map(function(x){return l.W.map(function(w,j){var z=l.b[j];for(var i=0;i<x.length;i++)z+=w[i]*x[i];return last?1/(1+Math.exp(-z)):Math.tanh(z);});});}
+function bwdL(l,X,Yo,d,last,g){var dX=X.map(function(x){return x.map(function(){return 0;});});
+  for(var n=0;n<X.length;n++)for(var j=0;j<l.W.length;j++){var dz=last?d[n][j]:d[n][j]*(1-Yo[n][j]*Yo[n][j]);
+    g.b[j]+=dz;for(var i=0;i<X[n].length;i++){g.W[j][i]+=dz*X[n][i];dX[n][i]+=l.W[j][i]*dz;}}return dX;}
+/* GPipe 순서: M개 조각 순전파 → 역순으로 역전파, 기울기는 층(장치)마다 누적. 손실 스케일은 1/N(미니배치 전체) */
+function gradPipe(net,X,Y,M,N){var K=net.length,b=X.length/M,acts=[],g=zeroLike(net),loss=0,m,k,a;
+  for(m=0;m<M;m++){var h=X.slice(m*b,(m+1)*b);a=[h];for(k=0;k<K;k++){h=fwdL(net[k],h,k===K-1);a.push(h);}acts.push(a);}
+  for(m=M-1;m>=0;m--){a=acts[m];var d=a[K].map(function(pi,n){var y=Y[m*b+n];loss-=(y?Math.log(pi[0]+1e-12):Math.log(1-pi[0]+1e-12))/N;return [(pi[0]-y)/N];});
+    for(k=K-1;k>=0;k--)d=bwdL(net[k],a[k],a[k+1],d,k===K-1,g[k]);}
+  return {g:g,loss:loss};}
+function sgdStep(net,g,lr){net.forEach(function(l,k){l.W.forEach(function(r,j){for(var i=0;i<r.length;i++)r[i]-=lr*g[k].W[j][i];});l.b.forEach(function(v,j){l.b[j]-=lr*g[k].b[j];});});}
+function lossOf(net,X,Y){var h=X;for(var k=0;k<net.length;k++)h=fwdL(net[k],h,k===net.length-1);var s=0;h.forEach(function(p,n){s-=Y[n]?Math.log(p[0]+1e-12):Math.log(1-p[0]+1e-12);});return s/X.length;}
+function maxDiff(a,b){var m=0;a.forEach(function(l,k){l.W.forEach(function(r,j){r.forEach(function(v,i){m=Math.max(m,Math.abs(v-b[k].W[j][i]));});});l.b.forEach(function(v,j){m=Math.max(m,Math.abs(v-b[k].b[j]));});});return m;}
+function predict(net,x){var h=[x];for(var k=0;k<net.length;k++)h=fwdL(net[k],h,k===net.length-1);return h[0][0];}
+/* CORE-END */
+
+/* ══════ 공통: 타임라인 그리기 ══════ */
+function drawTL(cv,sim,o){
+  o=o||{};var S=setup(cv),c=S.c,W=S.w,H=S.h,K=sim.K;
+  var Lm=W<480?44:56,Rm=o.right?36:8,top=4,bot=20;
+  var T=o.T||sim.span,upd=T*0.035,sx=(W-Lm-Rm)/(T+upd);
+  var rowH=(H-top-bot)/K,gap=Math.min(3,rowH*0.14);
+  function X(t){return Lm+t*sx;}
+  c.font=(W<480?'10.5px':'11.5px')+' system-ui';c.textBaseline='middle';
+  for(var k=0;k<K;k++){var y=top+k*rowH;
+    c.fillStyle=o.hl===k?css('--wash'):hexA(css('--axis'),0.12);c.fillRect(Lm,y+gap/2,X(sim.span)-Lm,rowH-gap);
+    c.fillStyle=o.hl===k?css('--s1'):css('--text-secondary');c.textAlign='right';c.fillText((W<480?'':'장치 ')+k,Lm-6,y+rowH/2);
+    if(o.right){c.textAlign='left';c.fillStyle=css('--text-primary');c.fillText(o.right[k],X(T+upd)+6,y+rowH/2);}}
+  var cur=o.cursor==null?Infinity:o.cursor;
+  var colF=css('--s1'),colB=css('--s2'),colR=css('--s4');
+  sim.ops.forEach(function(op){if(op.s>=cur)return;var e=Math.min(op.e,cur),y=top+op.k*rowH+gap/2,hh=rowH-gap;
+    var x0=X(op.s)+0.5,x1=X(e)-0.5;if(x1<=x0)return;
+    var alt=op.m%2?0.78:1;
+    if(op.t==='B'&&op.rc>0){var xr=Math.min(X(op.s+op.rc),x1);c.fillStyle=hexA(colR,alt);c.fillRect(x0,y,xr-x0,hh);
+      if(x1>xr){c.fillStyle=hexA(colB,alt);c.fillRect(xr,y,x1-xr,hh);}}
+    else{c.fillStyle=hexA(op.t==='F'?colF:colB,alt);c.fillRect(x0,y,x1-x0,hh);}
+    if(hh>11&&e===op.e&&c.measureText(String(op.m)).width+4<x1-x0){c.fillStyle='#fff';c.textAlign='center';c.fillText(op.m,(x0+x1)/2,y+hh/2+0.5);}});
+  if(cur>=sim.span){c.fillStyle=css('--s3');for(k=0;k<K;k++){var yy=top+k*rowH+gap/2;c.fillRect(X(sim.span)+1,yy,upd*sx-1,rowH-gap);}}
+  /* 시간 눈금 */
+  c.fillStyle=css('--muted');c.textAlign='center';c.strokeStyle=css('--grid');
+  var step=Math.pow(10,Math.floor(Math.log10(Math.max(1,T/6))));if(T/step>12)step*=2;if(T/step>12)step*=2.5;
+  for(var t=0;t<=T+1e-9;t+=step){c.beginPath();c.moveTo(X(t),H-bot+2);c.lineTo(X(t),H-bot+6);c.stroke();c.fillText(fmt(t,step<1?1:0),X(t),H-bot+13);}
+  if(o.cursor!=null&&o.cursor<sim.span){c.strokeStyle=css('--text-primary');c.lineWidth=1.5;c.beginPath();c.moveTo(X(o.cursor),top);c.lineTo(X(o.cursor),H-bot);c.stroke();c.lineWidth=1;}
+  return {X:X,Lm:Lm,Rm:Rm,sx:sx};
+}
+function busyAt(sim,t){var n=0;sim.ops.forEach(function(o){if(o.s<=t&&t<o.e)n++;});return n;}
+
+/* ══════ 데모 1 · 파라미터 메모리 ══════ */
+var D1P=[['Naive-1 · 3층',3,1,'282.2M',3.15,11.7],['Pipeline-1 · 13층',13,1,'785.8M',8.8,6.4],['Pipeline-8 · 103층',103,8,'5.3B',59.5,50.9],
+  ['Pipeline-32 · 415층',415,32,'21.0B',235.1,199.9],['Pipeline-128 · 1663층',1663,128,'83.9B',937.9,796.1]];
+var d1L=3;
+function d1LfromSlider(){return Math.max(1,Math.round(Math.exp(Math.log(2000)*(+$('#d1L').value)/100)));}
+function d1SliderFromL(L){return 100*Math.log(L)/Math.log(2000);}
+function fmtP(p){return p>=1e9?fmt(p/1e9,2)+'B':fmt(p/1e6,1)+'M';}
+function drawD1(){
+  var L=d1L,K=Math.pow(2,+$('#d1K').value);$('#d1Lv').textContent=L;$('#d1Kv').textContent=K;
+  var P=tfParams(L),per=P*4/K/GiB,tot=12*P/GiB,pre=null;
+  D1P.forEach(function(r){if(r[1]===L&&r[2]===K)pre=r;});
+  var act=pre?pre[5]/K:0,sum=3*per+act,cap=16;
+  var S=setup($('#d1cv')),c=S.c,W=S.w;var x0=16,x1=W-22,mx=Math.max(cap*1.25,sum*1.08);
+  function X(v){return x0+(x1-x0)*v/mx;}
+  var y=26,h=40;c.fillStyle=hexA(css('--axis'),0.15);c.fillRect(x0,y,x1-x0,h);
+  var cols=[css('--s1'),css('--s3'),css('--s4')],x=0;
+  for(var i=0;i<3;i++){c.fillStyle=cols[i];c.fillRect(X(x),y,Math.max(0.5,X(x+per)-X(x)),h);x+=per;}
+  if(act){c.fillStyle=css('--s2');c.fillRect(X(x),y,X(x+act)-X(x),h);}
+  c.strokeStyle=css('--text-secondary');c.setLineDash([4,3]);c.lineWidth=1.5;c.beginPath();c.moveTo(X(cap),y-12);c.lineTo(X(cap),y+h+12);c.stroke();c.setLineDash([]);c.lineWidth=1;
+  c.font='12px system-ui';c.fillStyle=css('--text-secondary');c.textAlign='center';c.textBaseline='alphabetic';c.fillText('장치 메모리 16GB',X(cap),y-15);
+  c.fillStyle=css('--muted');var stp=mx>200?100:mx>80?20:mx>30?10:4;
+  for(var t=0;t<=mx;t+=stp){c.fillText(t+'GB',X(t),y+h+28);}
+  var fits=sum<=cap;
+  var maxL=Math.floor((cap*GiB*K/12-2*TF.V*TF.d)/tfLayer());
+  $('#d1out').innerHTML='<span>파라미터 수<b>'+fmtP(P)+'</b></span><span>전체 파라미터 메모리<b>'+fmt(tot,1)+' GB</b></span>'+
+    '<span>장치당 (파라미터만)<b>'+fmt(3*per,2)+' GB</b></span>'+(pre?'<span>논문 표 1 (파라미터 / 활성)<b>'+pre[3]+' · '+pre[4]+' / '+pre[5]+' GB</b></span>':'')+
+    '<span>'+(pre?'장치당 (활성 포함)':'파라미터만으로')+'<b style="color:'+(fits?'var(--good)':'var(--s8)')+'">'+(fits?'들어감':'안 들어감')+'</b></span>'+
+    '<span>파라미터만 따지면 K = '+K+'에서 최대<b>'+fmtInt(maxL)+'층</b></span>';
+}
+(function(){var box=$('#d1pre');D1P.forEach(function(r){var b=document.createElement('button');b.type='button';b.textContent=r[0];
+  b.addEventListener('click',function(){d1L=r[1];$('#d1L').value=d1SliderFromL(r[1]);$('#d1K').value=Math.log2(r[2]);drawD1();});box.appendChild(b);});})();
+$('#d1L').addEventListener('input',onFrame(function(){d1L=d1LfromSlider();drawD1();}));
+$('#d1K').addEventListener('input',onFrame(drawD1));
+
+/* ══════ 데모 2 · 단순 모델 병렬 ══════ */
+function drawD2(){
+  var K=+$('#d2K').value,r=+$('#d2r').value;$('#d2Kv').textContent=K;$('#d2rv').textContent=fmt(r,1)+'×';
+  var sim=simulate(K,1,{bRatio:r});
+  $('#d2cv').dataset.h=Math.max(90,30+K*26);
+  drawTL($('#d2cv'),sim,{});
+  $('#d2out').innerHTML='<span>한 스텝 시간<b>'+fmt(sim.span,1)+' t<sub>F</sub></b></span><span>장치당 가동률<b>'+pct(1-sim.bubble)+'</b></span><span>놀고 있는 비율<b>'+pct(sim.bubble)+'</b></span><span>장치 1대 대비 가속<b>'+fmt(K*(1-sim.bubble),2)+'×</b></span>';
+}
+['#d2K','#d2r'].forEach(function(id){$(id).addEventListener('input',onFrame(drawD2));});
+
+/* ══════ 데모 3 · 파이프라인 타임라인 ══════ */
+var anim3=null;
+function sim3(){return simulate(+$('#d3K').value,+$('#d3M').value,{bRatio:+$('#d3r').value});}
+function drawD3(){
+  var K=+$('#d3K').value,M=+$('#d3M').value,r=+$('#d3r').value,f=+$('#d3t').value;
+  $('#d3Kv').textContent=K;$('#d3Mv').textContent=M;$('#d3rv').textContent=fmt(r,1)+'×';
+  var sim=sim3(),cur=f>=1?null:f*sim.span;$('#d3tv').textContent=f>=1?'끝':fmt(f*sim.span,1);
+  $('#d3cv').dataset.h=Math.max(90,30+K*25);
+  var g=drawTL($('#d3cv'),sim,{cursor:cur});
+  /* 일하는 장치 수 */
+  var S=setup($('#d3u')),c=S.c,H=S.h,n=Math.max(80,Math.round(S.w));
+  c.fillStyle=hexA(css('--axis'),0.6);c.beginPath();c.moveTo(g.X(0),H-4);
+  for(var i=0;i<=n;i++){var t=sim.span*i/n;if(cur!=null&&t>cur)break;var b=busyAt(sim,Math.min(t,sim.span-1e-9));c.lineTo(g.X(t),H-4-(H-12)*b/K);}
+  c.lineTo(g.X(cur==null?sim.span:Math.min(cur,sim.span)),H-4);c.closePath();c.fill();
+  c.strokeStyle=css('--grid');c.beginPath();c.moveTo(g.X(0),8);c.lineTo(g.X(sim.span),8);c.stroke();
+  c.font='11px system-ui';c.fillStyle=css('--muted');c.textAlign='right';c.textBaseline='middle';c.fillText(K+'대',g.Lm-6,8);c.fillText('0',g.Lm-6,H-4);
+  var now=cur==null?'':'<span>지금 일하는 장치<b>'+busyAt(sim,cur)+' / '+K+'</b></span>';
+  $('#d3out').innerHTML=now+'<span>한 스텝 시간<b>'+fmt(sim.span,1)+' t<sub>F</sub></b></span><span>버블 (시뮬레이션)<b>'+pct(sim.bubble)+'</b></span><span>(K−1)/(M+K−1)<b>'+pct(bubbleFrac(K,M))+'</b></span><span>장치 1대 대비 가속<b>'+fmt(K*(1-sim.bubble),2)+'×</b></span>';
+}
+function stop3(){if(anim3){cancelAnimationFrame(anim3);anim3=null;$('#d3play').textContent='▶ 재생';}}
+['#d3K','#d3M','#d3r'].forEach(function(id){$(id).addEventListener('input',onFrame(function(){drawD3();}));});
+$('#d3t').addEventListener('input',function(){stop3();onFrame(drawD3)();});
+$('#d3play').addEventListener('click',function(){
+  if(anim3){stop3();return;}
+  var t0=null,start=+$('#d3t').value>=1?0:+$('#d3t').value;$('#d3play').textContent='❚❚ 멈춤';
+  function tick(ts){if(t0==null)t0=ts;var f=start+(ts-t0)/5000;if(f>=1){f=1;}$('#d3t').value=f;drawD3();
+    if(f<1)anim3=requestAnimationFrame(tick);else{anim3=null;$('#d3play').textContent='▶ 재생';}}
+  anim3=requestAnimationFrame(tick);});
+function set3(K,M,r){stop3();$('#d3K').value=K;$('#d3M').value=M;if(r!=null)$('#d3r').value=r;$('#d3t').value=1;drawD3();}
+$('#d3fig').addEventListener('click',function(){set3(4,4,1);});
+$('#d3naive').addEventListener('click',function(){set3(+$('#d3K').value,1);});
+$('#d3many').addEventListener('click',function(){var K=+$('#d3K').value;set3(K,Math.min(32,4*K));});
+
+/* ══════ 데모 4 · 버블 곡선과 표 2 ══════ */
+var T2={1:[1,1.07,1.3],4:[1.7,3.2,4.8],32:[1.8,3.4,6.3]};
+function drawD4(){
+  var K=Math.pow(2,+$('#d4K').value-1),M=Math.pow(2,+$('#d4M').value);$('#d4Kv').textContent=K;$('#d4Mv').textContent=M;
+  var S=setup($('#d4cv')),c=S.c,W=S.w,H=S.h,L=40,R=12,T=10,B=30;
+  function X(m){return L+(W-L-R)*Math.log2(m)/7;}function Y(v){return T+(H-T-B)*(1-v);}
+  c.font='11.5px system-ui';c.strokeStyle=css('--grid');c.fillStyle=css('--muted');c.textBaseline='middle';
+  for(var v=0;v<=1.0001;v+=0.2){c.beginPath();c.moveTo(L,Y(v));c.lineTo(W-R,Y(v));c.stroke();c.textAlign='right';c.fillText(Math.round(v*100)+'%',L-5,Y(v));}
+  c.textAlign='center';for(var e=0;e<=7;e++){c.fillText(Math.pow(2,e),X(Math.pow(2,e)),H-B+14);}c.fillText('마이크로배치 수 M',L+(W-L-R)/2,H-4);
+  var Ks=[2,4,8,16],cols=[css('--s3'),css('--s1'),css('--s2'),css('--s4')];
+  Ks.forEach(function(k,i){c.strokeStyle=cols[i];c.lineWidth=k===K?3:1.3;c.globalAlpha=k===K?1:0.65;c.beginPath();
+    for(var j=0;j<=140;j++){var m=Math.pow(2,7*j/140);var y=Y(bubbleFrac(k,m));j?c.lineTo(X(m),y):c.moveTo(X(m),y);}c.stroke();
+    c.globalAlpha=1;c.lineWidth=1;
+    if(4*k<=128){c.setLineDash([3,3]);c.beginPath();c.moveTo(X(4*k),Y(bubbleFrac(k,4*k))-6);c.lineTo(X(4*k),Y(0));c.stroke();c.setLineDash([]);}
+    c.fillStyle=cols[i];c.textAlign='left';c.fillText('K='+k,X(1)+4+i*42,Y(1)+8);});
+  if(Ks.indexOf(K)<0){c.strokeStyle=css('--text-primary');c.lineWidth=3;c.beginPath();for(var j=0;j<=140;j++){var m=Math.pow(2,7*j/140),y=Y(bubbleFrac(K,m));j?c.lineTo(X(m),y):c.moveTo(X(m),y);}c.stroke();c.lineWidth=1;}
+  var b=bubbleFrac(K,M);c.fillStyle=css('--text-primary');c.beginPath();c.arc(X(M),Y(b),5,0,7);c.fill();
+  $('#d4out').innerHTML='<span>버블 (전체 시간 대비)<b>'+pct(b)+'</b></span><span>(K−1)/M (계산 시간 대비)<b>'+pct((K-1)/M)+'</b></span><span>장치 1대 대비 가속<b>'+fmt(idealThr(K,M),2)+'× / '+K+'×</b></span><span>M ≥ 4K?<b>'+(M>=4*K?'예':'아니오')+'</b></span>';
+}
+['#d4K','#d4M'].forEach(function(id){$(id).addEventListener('input',onFrame(drawD4));});
+(function(){var h='';[1,4,32].forEach(function(M){h+='<tr><td>M = '+M+'</td>';[2,4,8].forEach(function(K,i){
+  h+='<td class="num">'+T2[M][i]+' <span class="vs">/ '+fmt(idealThr(K,M)/idealThr(2,1),2)+'</span></td>';});h+='</tr>';});$('#d4tab').innerHTML=h;})();
+
+/* ══════ 데모 5 · 분할 ══════ */
+var d5seed=5;
+function d5costs(shape){var c=[],i;
+  if(shape==='flat')for(i=0;i<24;i++)c.push(1);
+  else if(shape==='ramp')for(i=0;i<24;i++)c.push(0.35+2.2*Math.pow(i/23,1.6));
+  else{var r=rng(d5seed);for(i=0;i<24;i++)c.push(0.3+1.5*r());c[Math.floor(r()*24)]=3.2;}
+  return c;}
+function cellCol(j){return css(['--s1','--s2','--s3','--s4','--s8','--warn','--good','--muted'][j%8]);}
+function drawD5(){
+  var K=+$('#d5K').value;$('#d5Kv').textContent=K;
+  var cst=d5costs(segVal('#d5shape')),bd=segVal('#d5meth')==='dp'?partitionDP(cst,K):partitionEq(24,K),sums=cellSums(cst,bd);
+  var S=setup($('#d5cv')),c=S.c,W=S.w,H=S.h,L=8,R=8,top=8,mid=120;
+  var cm=Math.max.apply(null,cst),bw=(W-L-R)/24;
+  for(var j=0;j<K;j++)for(var i=bd[j];i<bd[j+1];i++){c.fillStyle=cellCol(j);var hh=(mid-top-18)*cst[i]/cm;c.fillRect(L+i*bw+1,mid-18-hh,bw-2,hh);}
+  c.font='11px system-ui';c.fillStyle=css('--muted');c.textAlign='left';c.textBaseline='middle';c.fillText('층별 비용 (24층)',L,mid-6);
+  var sm=Math.max.apply(null,sums),tot=sums.reduce(function(a,b){return a+b;},0),avg=tot/K;
+  var y0=H-22,y1=mid+14,cw=(W-L-R)/K;
+  function Y(v){return y0-(y0-y1)*v/(sm*1.08);}
+  for(j=0;j<K;j++){c.fillStyle=cellCol(j);c.fillRect(L+j*cw+4,Y(sums[j]),cw-8,y0-Y(sums[j]));
+    c.fillStyle=css('--text-secondary');c.textAlign='center';c.fillText('셀 '+j+' · '+(bd[j+1]-bd[j])+'층',L+j*cw+cw/2,y0+11);}
+  c.strokeStyle=css('--text-primary');c.setLineDash([5,3]);c.beginPath();c.moveTo(L,Y(sm));c.lineTo(W-R,Y(sm));c.stroke();
+  c.strokeStyle=css('--muted');c.beginPath();c.moveTo(L,Y(avg));c.lineTo(W-R,Y(avg));c.stroke();c.setLineDash([]);
+  c.fillStyle=css('--text-primary');c.textAlign='right';c.fillText('가장 느린 셀',W-R-2,Y(sm)-8);
+  $('#d5out').innerHTML='<span>가장 느린 셀 / 평균<b>'+fmt(sm,2)+' / '+fmt(avg,2)+'</b></span><span>균형 효율 (평균 ÷ 최대)<b>'+pct(avg/sm)+'</b></span><span>이상적인 가속 (합 ÷ 최대)<b>'+fmt(tot/sm,2)+'× / '+K+'×</b></span>';
+}
+segInit('#d5shape',drawD5);segInit('#d5meth',drawD5);
+$('#d5K').addEventListener('input',onFrame(drawD5));
+$('#d5new').addEventListener('click',function(){d5seed++;$('#d5shape').querySelectorAll('button').forEach(function(b){b.setAttribute('aria-pressed',b.dataset.v==='rand'?'true':'false');});drawD5();});
+
+/* ══════ 데모 6 · 재계산과 활성 메모리 ══════ */
+function drawD6(){
+  var L=+$('#d6L').value,K=+$('#d6K').value,M=Math.pow(2,+$('#d6M').value),N=32,rm=$('#d6rm').checked;
+  $('#d6d').max=K-1;var d=Math.min(+$('#d6d').value,K-1);
+  $('#d6Lv').textContent=L;$('#d6Kv').textContent=K;$('#d6Mv').textContent=M+' (N = 32, 조각 크기 '+(N/M)+')';$('#d6dv').textContent=d;
+  var l=L/K,b=N/M,simR=simulate(K,M,{bRatio:2,remat:true}),simN=simulate(K,M,{bRatio:2,remat:false}),sim=rm?simR:simN;
+  var T=simR.span;
+  $('#d6tl').dataset.h=Math.max(80,26+K*16);
+  var g=drawTL($('#d6tl'),sim,{T:T,hl:d});
+  var tr=memTrace(simR,d,l,b,true),tn=memTrace(simN,d,l,b,false);
+  var S=setup($('#d6cv')),c=S.c,W=S.w,H=S.h,top=12,bot=18,ymax=Math.max(tn.peak,tr.peak)*1.1||1;
+  function Y(v){return H-bot-(H-bot-top)*v/ymax;}
+  c.font='11px system-ui';c.textBaseline='middle';c.strokeStyle=css('--grid');c.fillStyle=css('--muted');
+  [0,0.5,1].forEach(function(f){var v=ymax/1.1*f;c.beginPath();c.moveTo(g.Lm,Y(v));c.lineTo(W-g.Rm,Y(v));c.stroke();c.textAlign='right';c.fillText(fmtInt(v),g.Lm-6,Y(v));});
+  function step(pts,fn,fill,stroke,lw){c.beginPath();c.moveTo(g.X(0),Y(0));for(var i=1;i<pts.length;i++){c.lineTo(g.X(pts[i][0]),Y(fn(pts[i-1])));c.lineTo(g.X(pts[i][0]),Y(fn(pts[i])));}
+    if(fill){c.lineTo(g.X(pts[pts.length-1][0]),Y(0));c.closePath();c.fillStyle=fill;c.fill();}else{c.strokeStyle=stroke;c.lineWidth=lw||1.5;c.stroke();c.lineWidth=1;}}
+  if(rm){step(tr.pts,function(p){return p[1]+p[2];},hexA(css('--s4'),0.75));step(tr.pts,function(p){return p[1];},hexA(css('--s1'),0.85));}
+  else step(tn.pts,function(p){return p[1];},hexA(css('--s1'),0.85));
+  step(tn.pts,function(p){return p[1];},null,css('--muted'),1.5);
+  if(rm)step(tr.pts,function(p){return p[1]+p[2];},null,css('--s4'),1);
+  var fN=N*L/K,fR=N+(L/K)*(N/M);
+  $('#d6out').innerHTML='<span>정점 · 재계산 없음<b>'+fmtInt(tn.peak)+'</b> <span class="vs">N·L/K = '+fmtInt(fN)+'</span></span>'+
+    '<span>정점 · 재계산<b>'+fmt(tr.peak,tr.peak%1?1:0)+'</b> <span class="vs">N + (L/K)(N/M) = '+fmt(fR,fR%1?1:0)+'</span></span>'+
+    '<span>한 장치·분할 없음 N·L<b>'+fmtInt(N*L)+'</b></span>'+
+    '<span>재계산의 시간 비용<b>+'+pct(simR.span/simN.span-1,0)+'</b></span>';
+}
+['#d6L','#d6K','#d6M','#d6d','#d6rm'].forEach(function(id){$(id).addEventListener('input',onFrame(drawD6));});
+
+/* ══════ 데모 7 · 동기식 누적 vs 다른 방법 ══════ */
+var D7={data:makeData(64,3),sz:[2,16,16,16,1],lr:0.3,steps:400},st7=null,anim7=null;
+function reset7(){
+  if(anim7){cancelAnimationFrame(anim7);anim7=null;}$('#d7go').textContent='▶ 학습';
+  var M=Math.pow(2,+$('#d7M').value),d=+$('#d7d').value;$('#d7Mv').textContent=M+' (조각 크기 '+(64/M)+')';$('#d7dv').textContent=d;
+  var A=mlpInit(D7.sz,11);
+  st7={t:0,M:M,d:d,A:A,B:cloneNet(A),C:cloneNet(A),S:cloneNet(A),hist:[cloneNet(A)],L:[[],[],[],[]],dB:0,dC:0};
+  var l0=lossOf(A,D7.data.X,D7.data.Y);for(var i=0;i<4;i++)st7.L[i].push(l0);
+  drawD7();}
+function step7(){var s=st7,D=D7.data,lr=D7.lr,M=s.M,b=64/M;
+  sgdStep(s.A,gradPipe(s.A,D.X,D.Y,1,64).g,lr);
+  sgdStep(s.B,gradPipe(s.B,D.X,D.Y,M,64).g,lr);
+  for(var m=0;m<M;m++){sgdStep(s.C,gradPipe(s.C,D.X.slice(m*b,(m+1)*b),D.Y.slice(m*b,(m+1)*b),1,b).g,lr/M);}
+  var old=s.hist[0];sgdStep(s.S,gradPipe(old,D.X,D.Y,1,64).g,lr);s.hist.push(cloneNet(s.S));while(s.hist.length>s.d)s.hist.shift();
+  s.t++;[s.A,s.B,s.C,s.S].forEach(function(n,i){s.L[i].push(lossOf(n,D.X,D.Y));});
+  s.dB=maxDiff(s.A,s.B);s.dC=maxDiff(s.A,s.C);}
+function drawD7(){
+  var s=st7,S=setup($('#d7cv')),c=S.c,W=S.w,H=S.h,L=40,R=16,T=8,B=36,lo=-3.5,hi=0.3;
+  function X(t){return L+(W-L-R)*t/D7.steps;}function Y(v){return T+(H-T-B)*(hi-Math.log10(Math.max(v,1e-4)))/(hi-lo);}
+  c.font='11px system-ui';c.textBaseline='middle';c.strokeStyle=css('--grid');c.fillStyle=css('--muted');
+  for(var e=-3;e<=0;e++){c.beginPath();c.moveTo(L,Y(Math.pow(10,e)));c.lineTo(W-R,Y(Math.pow(10,e)));c.stroke();c.textAlign='right';c.fillText(e===0?'1':'1e'+e,L-5,Y(Math.pow(10,e)));}
+  c.textAlign='center';for(var t=0;t<=D7.steps;t+=100)c.fillText(t,X(t),H-B+12);c.fillText('스텝 · 손실(로그)',L+(W-L-R)/2,H-5);
+  var cols=[css('--text-primary'),css('--s1'),css('--s2'),css('--s4')],lw=[4,1.6,1.6,1.6];
+  [0,2,3,1].forEach(function(i){var a=s.L[i];c.strokeStyle=cols[i];c.lineWidth=lw[i];if(i===1)c.setLineDash([6,4]);c.globalAlpha=i===0?0.35:1;
+    c.beginPath();a.forEach(function(v,t){t?c.lineTo(X(t),Y(v)):c.moveTo(X(t),Y(v));});c.stroke();c.setLineDash([]);c.globalAlpha=1;c.lineWidth=1;});
+  /* 결정 경계 */
+  var S2=setup($('#d7bd')),c2=S2.c,W2=S2.w,H2=S2.h,n=36,sz=Math.min(W2,H2),ox=(W2-sz)/2;
+  function mx(x){return ox+(x+1.6)/3.2*sz;}function my(y){return (1.6-y)/3.2*sz;}
+  var cw=sz/n;for(var i=0;i<n;i++)for(var j=0;j<n;j++){var x=-1.6+3.2*(i+0.5)/n,y=1.6-3.2*(j+0.5)/n,p=predict(s.B,[x,y]);
+    c2.fillStyle=p>0.5?hexA(css('--s2'),0.12+0.4*(p-0.5)):hexA(css('--s1'),0.12+0.4*(0.5-p));c2.fillRect(ox+i*cw,j*cw,cw+0.5,cw+0.5);}
+  D7.data.X.forEach(function(x,k){c2.fillStyle=D7.data.Y[k]?css('--s2'):css('--s1');c2.strokeStyle=css('--surface-1');c2.beginPath();c2.arc(mx(x[0]),my(x[1]),4,0,7);c2.fill();c2.stroke();});
+  var last=function(i){return s.L[i][s.L[i].length-1];};
+  $('#d7out').innerHTML='<span>스텝<b>'+s.t+'</b></span><span>손실 ① / ② / ③ / ④<b>'+[0,1,2,3].map(function(i){return fmt(last(i),4);}).join(' / ')+'</b></span>'+
+    '<span>max |θ① − θ②|<b style="color:var(--good)">'+(s.t?s.dB.toExponential(1):'0')+'</b></span><span>max |θ① − θ③|<b style="color:var(--s2)">'+(s.t?s.dC.toExponential(1):'0')+'</b></span>';
+}
+$('#d7go').addEventListener('click',function(){
+  if(anim7){cancelAnimationFrame(anim7);anim7=null;$('#d7go').textContent='▶ 학습';return;}
+  if(st7.t>=D7.steps)reset7();$('#d7go').textContent='❚❚ 멈춤';
+  function tick(){for(var k=0;k<5&&st7.t<D7.steps;k++)step7();drawD7();if(st7.t<D7.steps)anim7=requestAnimationFrame(tick);else{anim7=null;$('#d7go').textContent='▶ 다시 학습';}}
+  anim7=requestAnimationFrame(tick);});
+$('#d7reset').addEventListener('click',reset7);
+['#d7M','#d7d'].forEach(function(id){$(id).addEventListener('input',reset7);});
+
+/* ══════ 데모 8 · 표 1 ══════ */
+var T1={a:{cap:8,cols:['Naive-1','Pipeline-1','Pipeline-2','Pipeline-4','Pipeline-8'],K:[1,1,2,4,8],cfg:['(18, 208)','(18, 416)','(18, 544)','(36, 544)','(72, 512)'],
+    P:['82M','318M','542M','1.05B','1.8B'],pm:[1.05,3.8,6.45,12.53,24.62],am:[6.26,3.46,8.11,15.21,26.24]},
+  t:{cap:16,cols:['Naive-1','Pipeline-1','Pipeline-8','Pipeline-32','Pipeline-128'],K:[1,1,8,32,128],cfg:['3층','13층','103층','415층','1663층'],
+    P:['282.2M','785.8M','5.3B','21.0B','83.9B'],pm:[3.15,8.8,59.5,235.1,937.9],am:[11.7,6.4,50.9,199.9,796.1]}};
+function drawD8(){
+  var d=T1[segVal('#d8m')],S=setup($('#d8cv')),c=S.c,W=S.w,H=S.h,L=34,R=6,T=26,B=40,n=5,cw=(W-L-R)/n;
+  function Y(v){return H-B-(H-B-T)*v/(d.cap*1.12);}
+  c.font='11px system-ui';c.textBaseline='middle';c.strokeStyle=css('--grid');c.fillStyle=css('--muted');
+  for(var v=0;v<=d.cap;v+=d.cap/4){c.beginPath();c.moveTo(L,Y(v));c.lineTo(W-R,Y(v));c.stroke();c.textAlign='right';c.fillText(v+'G',L-4,Y(v));}
+  var small=W<480;
+  for(var i=0;i<n;i++){var x=L+i*cw+cw*0.18,w=cw*0.64,p=d.pm[i]/d.K[i],a=d.am[i]/d.K[i];
+    c.fillStyle=css('--s1');c.fillRect(x,Y(p),w,Y(0)-Y(p));c.fillStyle=css('--s2');c.fillRect(x,Y(p+a),w,Y(p)-Y(p+a));
+    c.fillStyle=css('--text-primary');c.textAlign='center';c.font='650 '+(small?'11px':'12.5px')+' system-ui';c.fillText(d.P[i],x+w/2,Y(d.cap)-11);
+    c.font=(small?'10px':'11px')+' system-ui';c.fillStyle=css('--text-secondary');c.fillText(small?d.cols[i].replace('Pipeline','P').replace('Naive','N'):d.cols[i],x+w/2,H-B+12);
+    c.fillStyle=css('--muted');c.fillText(d.cfg[i],x+w/2,H-B+26);}
+  c.strokeStyle=css('--text-primary');c.setLineDash([5,3]);c.beginPath();c.moveTo(L,Y(d.cap));c.lineTo(W-R,Y(d.cap));c.stroke();c.setLineDash([]);
+  var fill=d.pm.map(function(p,i){return (p+d.am[i])/d.K[i]/d.cap;});
+  $('#d8out').innerHTML='<span>장치 메모리 사용률 (평균)<b>'+fill.map(function(f){return Math.round(f*100)+'%';}).join(' · ')+'</b></span><span>마지막 열 / 첫 열 파라미터<b>'+(segVal('#d8m')==='a'?'1.8B ÷ 82M = '+fmt(1.8e9/82e6,1)+'×':'83.9B ÷ 282.2M = '+fmt(83.9e9/282.2e6,0)+'×')+'</b></span>';
+}
+segInit('#d8m',drawD8);
+
+/* ══════ 데모 9 · GPipe vs 1F1B ══════ */
+function drawD9(){
+  var K=+$('#d9K').value,M=+$('#d9M').value;$('#d9Kv').textContent=K;$('#d9Mv').textContent=M;
+  var a=simulate(K,M,{bRatio:2}),b=simulate(K,M,{bRatio:2,sched:'1f1b'}),T=Math.max(a.span,b.span);
+  var pa=[],pb=[];for(var k=0;k<K;k++){pa.push(inflightPeak(a,k));pb.push(inflightPeak(b,k));}
+  ['#d9a','#d9b'].forEach(function(id){$(id).dataset.h=Math.max(80,24+K*20);});
+  drawTL($('#d9a'),a,{T:T,right:pa});drawTL($('#d9b'),b,{T:T,right:pb});
+  $('#d9out').innerHTML='<span>한 스텝 시간 GPipe / 1F1B<b>'+fmt(a.span,0)+' / '+fmt(b.span,0)+'</b></span><span>버블 GPipe / 1F1B<b>'+pct(a.bubble)+' / '+pct(b.bubble)+'</b></span><span>장치 0이 동시에 든 조각 수<b>'+pa[0]+' / '+pb[0]+'</b></span>';
+}
+['#d9K','#d9M'].forEach(function(id){$(id).addEventListener('input',onFrame(drawD9));});
+
+/* ══════ 퀴즈 ══════ */
+var QZ=[
+ {q:'마이크로배치 없이(M = 1) 모델을 K개 장치에 층 단위로 나누면 한 스텝은?',o:['K배 빨라진다','거의 그대로이고, 장치마다 1/K의 시간만 일한다','K배 느려진다'],a:1,
+  e:'층 사이 의존 때문에 한 번에 한 장치만 일합니다(그림 2b, 데모 2). 모델이 들어가게는 되지만 빨라지지는 않고, 표 2의 M = 1 행도 K와 무관하게 거의 일정했습니다.'},
+ {q:'셀 비용이 모두 같을 때 K = 4, M = 12인 GPipe의 버블 비율은?',o:['3/12 = 25%','3/15 = 20%','1/4 = 25%'],a:1,
+  e:'(K−1)/(M+K−1) = 3/15 = 20%입니다. (K−1)/M = 25%는 전체 시간이 아니라 이상적인 계산 시간에 대한 비율입니다.'},
+ {q:'GPipe로 장치 수나 M을 바꿔도 학습 결과가 같은 이유는?',o:['마이크로배치마다 학습률을 M으로 나누기 때문','모든 마이크로배치의 기울기를 같은 가중치에서 계산해 모아 두었다가 미니배치 끝에 한 번 갱신하기 때문','PipeDream처럼 가중치 버전을 여러 개 보관하기 때문'],a:1,
+  e:'평균 손실의 기울기는 조각별 기울기의 합과 같습니다. 그 사이에 갱신이 없으니 조건이 지켜지고, 데모 7에서 ①과 ②가 반올림 오차 수준으로 일치합니다.'},
+ {q:'재계산을 켠 GPipe에서 M을 키우면 장치당 정점 활성 메모리는?',o:['변하지 않는다','N + (L/K)(N/M)의 둘째 항이 줄어 내려간다','M에 비례해 늘어난다'],a:1,
+  e:'재계산 없이는 M개 조각의 셀 내부 활성을 모두 들고 있어 N·L/K로 일정합니다. 재계산을 하면 경계 입력(N)과 지금 역전파 중인 조각 하나의 내부 활성만 남습니다(데모 6).'},
+ {q:'GPipe에서 마이크로배치로 쪼개면 결과가 원래 미니배치와 달라질 수 있는 층은?',o:['드롭아웃 없는 완전 연결 층','BatchNorm','소프트맥스 출력 층'],a:1,
+  e:'BatchNorm은 학습 중 통계를 마이크로배치 단위로 계산하게 됩니다. 논문은 평가용 이동 평균을 미니배치 전체에 대해 따로 추적한다고 적었습니다(2.2절).'},
+ {q:'동기식 1F1B 스케줄이 GPipe 스케줄에 비해 나은 점은?',o:['버블이 0이 된다','버블은 같고, 장치가 동시에 들고 있는 마이크로배치 수가 M이 아니라 K 이하로 줄어든다','장치 사이 통신이 사라진다'],a:1,
+  e:'두 스케줄의 길이와 버블은 같습니다. 1F1B는 역전파를 일찍 시작해 끝난 조각의 활성을 바로 버리므로 장치 0도 K개까지만 들고 있습니다(데모 9).'},
+ {q:'GPipe가 NVLink 같은 고속 연결 없이도 거의 선형으로 빨라진 이유는?',o:['기울기를 압축해서 보내기 때문','셀 경계의 활성만 이웃 장치로 보내기 때문','모든 장치가 같은 가중치를 복제하기 때문'],a:1,
+  e:'텐서 병렬처럼 층마다 AllReduce를 하지 않고, 마이크로배치마다 경계 활성 하나만 넘깁니다. 표 3에서 PCI-E만 있는 GPU로도 K = 2 → 8에서 Transformer가 3.3배 빨라졌습니다.'}
+];
+(function(){
+  var box=$('#quiz'),score=0,done=0;
+  QZ.forEach(function(it,qi){
+    var d=document.createElement('div');d.className='q';
+    d.innerHTML='<h4>Q'+(qi+1)+'. '+it.q+'</h4>'+it.o.map(function(o,j){return '<label class="opt"><input type="radio" name="q'+qi+'" value="'+j+'">'+o+'</label>';}).join('')+'<div class="expl"></div>';
+    box.appendChild(d);
+    d.querySelectorAll('input').forEach(function(inp){inp.addEventListener('change',function(){
+      if(d.dataset.done)return;d.dataset.done=1;done++;
+      var j=+inp.value,ok=j===it.a;if(ok)score++;
+      d.querySelectorAll('.opt').forEach(function(l,x){if(x===it.a)l.classList.add('correct');else if(x===j)l.classList.add('wrong');});
+      var ex=d.querySelector('.expl');ex.textContent=(ok?'정답! ':'오답. ')+it.e;ex.classList.add('show');if(!ok)ex.classList.add('bad');
+      $('#quizScore').textContent=done+'문제 중 '+score+'개 정답'+(done===QZ.length?' — 끝!':'');
+    });});
+  });
+})();
+
+/* ══════ 테마·초기화 ══════ */
+function drawAll(){drawD1();drawD2();drawD3();drawD4();drawD5();drawD6();drawD7();drawD8();drawD9();}
+var tbtn=$('#themeBtn');
+if(window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches)document.documentElement.setAttribute('data-theme','dark');
+function syncBtn(){tbtn.textContent=document.documentElement.getAttribute('data-theme')==='dark'?'◑ 라이트':'◐ 다크';}
+tbtn.addEventListener('click',function(){var d=document.documentElement.getAttribute('data-theme')==='dark';
+  document.documentElement.setAttribute('data-theme',d?'light':'dark');cssCache={};syncBtn();drawAll();});
+$('#d1L').value=d1SliderFromL(d1L);
+reset7();syncBtn();drawAll();
+/* 모바일은 스크롤할 때 주소창이 접히며 resize가 계속 온다. 폭이 바뀔 때만 다시 그린다 */
+var rz,lastW=document.documentElement.clientWidth;
+window.addEventListener('resize',function(){clearTimeout(rz);rz=setTimeout(function(){
+  var w=document.documentElement.clientWidth;if(w===lastW)return;lastW=w;drawAll();},120);});
+var KX={delimiters:[{left:'$$',right:'$$',display:true},{left:'\\(',right:'\\)',display:false}]};
+document.addEventListener('DOMContentLoaded',function(){if(window.renderMathInElement)renderMathInElement(document.body,KX);});
+window.addEventListener('load',function(){if(window.renderMathInElement&&!document.querySelector('.katex'))renderMathInElement(document.body,KX);});
+</script>
+</body>
+</html>
