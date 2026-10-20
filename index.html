@@ -149,6 +149,8 @@ sup.fn a{text-decoration:none;font-weight:700;padding:0 2px}
 .footnotes .tw{font-size:13.5px}
 .footnotes .back{text-decoration:none;margin-left:4px}
 .pill{display:inline-block;font-size:11.5px;font-weight:700;padding:1px 8px;border-radius:999px;background:var(--wash);color:var(--s1);margin-left:6px;vertical-align:2px}
+
+@media (max-width:640px){.tog{position:absolute}}
 .seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden;flex-wrap:wrap}
 .seg button{border:none;border-radius:0;border-right:1px solid var(--border)}
 .seg button:last-child{border-right:none}
@@ -200,7 +202,7 @@ td.hi{background:var(--wash);font-weight:650}
 
 <div class="demo">
   <h4>데모 1 · 이 Transformer는 장치 몇 대에 들어가나?</h4>
-  <p class="cap">층 수 L과 장치 수 K를 바꾸면 파라미터 수와 장치당 파라미터 메모리(12바이트 × P ÷ K)를 계산합니다. 막대의 회색 선은 Cloud TPUv3 코어 하나의 메모리 16GB입니다. 버튼은 표 1의 다섯 열입니다. 활성 메모리는 계산하지 않고, 논문이 잰 값을 그대로 보여 줍니다.</p>
+  <p class="cap">층 수 L과 장치 수 K를 바꾸면 파라미터 수와 장치당 파라미터 메모리(12바이트 × P ÷ K)를 계산합니다. 막대 위의 점선은 Cloud TPUv3 코어 하나의 메모리 16GB입니다. 버튼은 표 1의 다섯 열입니다. 활성 메모리는 계산하지 않고, 논문이 잰 값을 그대로 보여 줍니다.</p>
   <div class="btns" id="d1pre"></div>
   <div class="ctrls">
     <div class="ctrl"><label>층 수 L <b id="d1Lv"></b></label><input type="range" id="d1L" min="0" max="100" step="0.1" value="15"></div>
@@ -285,7 +287,7 @@ td.hi{background:var(--wash);font-weight:650}
   </table></div>
   <p class="mini">각 칸: 논문 측정값 <span class="vs">/ 모형</span>. 논문 표 2 주석대로 배치 크기는 메모리에 맞게 조정되었을 수 있습니다.</p>
 </div>
-<p>M = 32 행은 모형과 8% 안에서 맞습니다. K를 2에서 8로 4배 늘렸을 때 1.8 → 6.3, 즉 <strong>3.5배</strong>라는 논문의 말이 여기서 나옵니다. M = 4 행은 측정이 모형보다 훨씬 높은데, 위에서 말한 재계산의 앞당김과 배치 크기 조정이 섞였을 것으로 보입니다. M = 1 행의 K = 8 값 1.3은 모형(1.0)이 설명하지 못합니다. 논문도 이 행에 대해서는 “장치 수와 상관없이 처리량이 비교적 일정하다”고만 적었습니다.</p>
+<p>M = 32 행은 모형과 8% 안에서 맞습니다. K를 2에서 8로 4배 늘렸을 때 1.8 → 6.3, 즉 <strong>3.5배</strong>라는 논문의 말이 여기서 나옵니다. M = 4 행은 측정이 모형보다 훨씬 높은데, 위에서 말한 재계산의 앞당김과 배치 크기 조정이 섞였을 것으로 보입니다. M = 1 행의 K = 8 값 1.3은 모형(1.0)보다 30% 높은데, <strong>논문에는 이 차이에 대한 설명이 없습니다.</strong> 3절은 이 행을 두고 “M = 1이면 사실상 파이프라인 병렬이 없고, 장치 수와 상관없이 처리량이 비교적 일정해 한 번에 한 장치만 계산하고 있음을 보여 준다”고만 적었습니다. 표 2 주석의 “필요하면 메모리에 맞게 배치 크기를 조정했다”는 문장이 원인일 수는 있지만, 어느 칸의 배치를 얼마로 바꿨는지는 밝히지 않아 확인할 수 없습니다.</p>
 <p class="note">이후 논문들(Megatron-LM 등)은 버블을 전체 시간에 대한 비율이 아니라 <strong>이상적인 계산 시간에 대한 비율</strong>로 (K−1)/M이라고 적습니다. 분모가 다를 뿐 같은 양입니다. 위 readout에 둘 다 표시했습니다.</p>
 
 <!-- ───────── 5 ───────── -->
@@ -605,13 +607,16 @@ function drawTL(cv,sim,o){
     if(o.right){c.textAlign='left';c.fillStyle=css('--text-primary');c.fillText(o.right[k],X(T+upd)+6,y+rowH/2);}}
   var cur=o.cursor==null?Infinity:o.cursor;
   var colF=css('--s1'),colB=css('--s2'),colR=css('--s4');
+  /* 라벨은 가장 좁은 칸에 가장 긴 번호가 들어갈 때만 전부 표시 (일부만 보이면 오해를 부른다) */
+  var minW=Infinity;sim.ops.forEach(function(op){minW=Math.min(minW,(op.e-op.s)*sx);});
+  var showLab=rowH-gap>11&&c.measureText(String(sim.M-1)).width+5<minW-1;
   sim.ops.forEach(function(op){if(op.s>=cur)return;var e=Math.min(op.e,cur),y=top+op.k*rowH+gap/2,hh=rowH-gap;
     var x0=X(op.s)+0.5,x1=X(e)-0.5;if(x1<=x0)return;
     var alt=op.m%2?0.78:1;
     if(op.t==='B'&&op.rc>0){var xr=Math.min(X(op.s+op.rc),x1);c.fillStyle=hexA(colR,alt);c.fillRect(x0,y,xr-x0,hh);
       if(x1>xr){c.fillStyle=hexA(colB,alt);c.fillRect(xr,y,x1-xr,hh);}}
     else{c.fillStyle=hexA(op.t==='F'?colF:colB,alt);c.fillRect(x0,y,x1-x0,hh);}
-    if(hh>11&&e===op.e&&c.measureText(String(op.m)).width+4<x1-x0){c.fillStyle='#fff';c.textAlign='center';c.fillText(op.m,(x0+x1)/2,y+hh/2+0.5);}});
+    if(showLab&&e===op.e){c.fillStyle='#fff';c.textAlign='center';c.fillText(op.m,(x0+x1)/2,y+hh/2+0.5);}});
   if(cur>=sim.span){c.fillStyle=css('--s3');for(k=0;k<K;k++){var yy=top+k*rowH+gap/2;c.fillRect(X(sim.span)+1,yy,upd*sx-1,rowH-gap);}}
   /* 시간 눈금 */
   c.fillStyle=css('--muted');c.textAlign='center';c.strokeStyle=css('--grid');
